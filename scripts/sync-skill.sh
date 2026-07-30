@@ -73,8 +73,9 @@ done
   for rel in "${FILES[@]}"; do
     [[ -f "$DEST/$rel" ]] || continue
     hash="$(sha256sum "$DEST/$rel" | cut -d' ' -f1)"
+    bytes="$(wc -c < "$DEST/$rel")"
     [[ $first -eq 0 ]] && printf ',\n'
-    printf '    "%s": "%s"' "$rel" "$hash"
+    printf '    "%s": { "bytes": %d, "sha256": "%s" }' "$rel" "$bytes" "$hash"
     first=0
   done
   printf '\n  }\n}\n'

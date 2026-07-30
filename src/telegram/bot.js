@@ -14,6 +14,7 @@ import {
   setSessionSite,
   addTurn,
   countTurns,
+  getTurns,
   createSummaryToken,
 } from '../session/store.js';
 import { runSummary, offerSummary, SUMMARY_YES, SUMMARY_NO } from '../session/summary.js';
@@ -107,11 +108,12 @@ async function handleQuestion(ctx, question) {
 
   try {
     const dataContext = site ? await buildDataContext(site, question) : null;
+    const pastTurns = getTurns(chatId);
 
     const envelope = await askClaude({
       question,
       dataContext,
-      turns: [],
+      turns: pastTurns,
       isFraud,
     });
 
