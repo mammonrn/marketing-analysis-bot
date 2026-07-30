@@ -12,14 +12,24 @@ import express from 'express';
 import { PUBLIC_DIR as PUBLIC_ROOT } from '../paths.js';
 import { logger } from '../logger.js';
 import { readSummary } from '../session/store.js';
+import { getTelegramStatus } from '../runtime-state.js';
 
 const PUBLIC_DIR = path.join(PUBLIC_ROOT, 'miniapp');
 
 export function createRouter() {
   const router = express.Router();
 
+  // `ok` reports that this process is serving HTTP. Telegram connectivity is
+  // reported alongside rather than folded into `ok`, so a monitor can tell
+  // "process down" apart from "process up but not talking to Telegram".
   router.get('/healthz', (req, res) => {
-    res.json({ ok: true, service: 'ads-analytics-bot', ts: new Date().toISOString() });
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      service: 'ads-analytics-bot',
+      telegram: getTelegramStatus(),
+      ts: new Date().toISOString(),
+    });
   });
 
   router.get('/miniapp', (req, res) => {

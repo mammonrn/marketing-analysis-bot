@@ -1,0 +1,43 @@
+{
+  "syncedAt": "2026-07-30T12:54:45.122Z",
+  "source": "https://drive.google.com/drive/folders/1jt997djrqFtOVx0IfUgnPtc9uDOQKH8s",
+  "note": "verified byte-for-byte against Drive file sizes",
+  "files": {
+    "SKILL.md": {
+      "bytes": 24729,
+      "sha256": "e76c9d2bfea31764a2a5ff651bff01c97414197d3f12376812ba27002fd4d3cf"
+    },
+    "references/casino-metrics.md": {
+      "bytes": 24200,
+      "sha256": "13052057df26e2c1703fc8c689736119008876cb696ee04b2f3ce3f0acd28149"
+    },
+    "references/u89-metrics.md": {
+      "bytes": 7406,
+      "sha256": "b42014edf498a2af49fbc12bd85ede6f78b4fe04e1ba71205136ec4ef70c49f0"
+    },
+    "references/88fed-metrics.md": {
+      "bytes": 8152,
+      "sha256": "4c144ba9be82b6900816a8003a71d9d495f79056d272f6cea14da97811c749d4"
+    },
+    "references/new-member-quality.md": {
+      "bytes": 13859,
+      "sha256": "a4863da0697bd058bc537f81c2818109e886794e08bccb0ab80a329458e03d3d"
+    },
+    "references/deposit-count-distribution.md": {
+      "bytes": 8322,
+      "sha256": "903b90ca6f35b169472206e5efeb89c8edd7e79c54b9336662a57fb02f1d84fd"
+    },
+    "references/brand-game-value.md": {
+      "bytes": 8591,
+      "sha256": "915557290c4f6d02266936cacd7275adaf8f6b229fab57fdf784aca48cde6c7e"
+    },
+    "references/vip-members.md": {
+      "bytes": 9528,
+      "sha256": "96dced86b3840ff3ecb304f6cc61a59cb2540cb45ffa4c90cb444b23a8632f4a"
+    },
+    "references/fraud-anomaly-detection.md": {
+      "bytes": 14959,
+      "sha256": "67df7ceb361e2c9b7b6840c97b5eaa560ebad323716f259fc8d4484c4b337dae"
+    }
+  }
+}

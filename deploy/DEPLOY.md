@@ -83,15 +83,23 @@ pm2 start ecosystem.config.cjs
 pm2 logs ads-analytics-bot --lines 40
 ```
 
-ใน log ควรเห็น:
+ใน log ควรเห็น (ครบ 5 บรรทัดนี้):
 ```
-{"level":"info","msg":"system prompt assembled","skillFiles":9,...}
+{"level":"info","msg":"system prompt assembled","skillFiles":9,"missing":[],"approxTokens":22116}
 {"level":"info","msg":"session store ready",...}
+{"level":"info","msg":"telegram authorised","username":"<ชื่อบอท>","botId":...}
 {"level":"info","msg":"telegram polling started"}
 {"level":"info","msg":"http server listening","port":3001}
 ```
 
-ถ้าขึ้น `fatal startup error` ให้อ่านบรรทัดนั้น — ปกติคือ env ขาดหรือ skill file ขาด
+`skillFiles` ต้องเป็น **9** และ `missing` ต้องเป็น `[]` — ถ้าไม่ใช่ แปลว่า skill file ขาด
+
+ถ้าขึ้น `fatal startup error` ให้อ่านข้อความในบรรทัดนั้น แล้ว exit code จะเป็น 1 — สาเหตุที่พบบ่อย:
+- `required skill file(s) missing: ...` → ไฟล์ใน `skills/` ไม่ครบ
+- `Missing required env var ...` → `.env` ยังไม่ครบ
+- `Telegram ปฏิเสธ token (401: Unauthorized)` → `TELEGRAM_BOT_TOKEN` ผิด
+
+บอทจะ**ไม่ start ถ้า token ผิด** โดยตั้งใจ — ดีกว่ารันแล้วเงียบไม่ตอบใครโดยไม่มีใครรู้
 
 ```bash
 pm2 save        # ให้รอดหลัง reboot
@@ -100,12 +108,21 @@ pm2 save        # ให้รอดหลัง reboot
 ## 6. เช็คว่าเข้าถึงได้
 
 ```bash
-curl -s localhost:3001/healthz                                   # จากบน VPS
+curl -s localhost:3001/healthz | python3 -m json.tool            # จากบน VPS
 curl -s https://analytics.xn--22ces5gg0h4d4ae2ai.com/healthz      # ผ่าน Nginx
+npm run smoke                                                     # เช็ค Mini App ครบทุก route
 ```
 
-ทั้งสองคำสั่งต้องได้ `{"ok":true,...}` ถ้าอันที่สองไม่ได้ ให้เทียบ Nginx กับ
-`deploy/nginx-analytics.conf` แล้ว `sudo nginx -t && sudo systemctl reload nginx`
+`/healthz` ต้องได้ `ok: true` **และ** `telegram.connected: true` พร้อมชื่อบอทใน `telegram.username`
+
+```json
+{"ok": true, "service": "ads-analytics-bot",
+ "telegram": {"connected": true, "mode": "polling", "username": "...", "error": null}}
+```
+
+`ok: true` แต่ `telegram.connected: false` = process รันอยู่แต่ไม่ได้ต่อ Telegram (ดู `telegram.error`)
+ถ้า curl ผ่าน Nginx ไม่ได้ ให้เทียบกับ `deploy/nginx-analytics.conf` แล้ว
+`sudo nginx -t && sudo systemctl reload nginx`
 
 ## 7. ทดสอบใน Telegram
 
@@ -162,6 +179,8 @@ grep -c '"level":"error"' logs/error.log
 |---|---|
 | ไม่ start, `required skill file(s) missing` | ไฟล์ใน `skills/` ไม่ครบ → `npm run check:skill` |
 | ไม่ start, `Missing required env var` | ยังไม่กรอก `.env` ให้ครบ |
+| ไม่ start, `Telegram ปฏิเสธ token` | `TELEGRAM_BOT_TOKEN` ผิด/ถูก revoke — ขอใหม่จาก BotFather |
+| ตอบแบบ Full Report / ยัด HTML มาให้ | `SKILL.md` เป็นเวอร์ชันเก่า → `npm test` จะจับให้ (เทสเช็คหัวข้อ "โหมดการตอบ") |
 | ตอบว่า "ยังไม่ได้เชื่อมข้อมูล" ทุกคำถาม | `SHEETS_CONFIG` ผิด / ชื่อแท็บไม่ตรง / refresh token หมดอายุ |
 | ปุ่ม Dashboard กดแล้วขึ้น "ลิงก์หมดอายุ" | token อายุ 1 ชม. — สั่ง `/สรุป` ใหม่ |
 | ไม่มีปุ่ม Dashboard เลย | `PUBLIC_URL` ไม่ได้ตั้ง (ดู log `PUBLIC_URL not set`) |

@@ -17,6 +17,7 @@ import {
   createSummaryToken,
 } from '../session/store.js';
 import { runSummary, offerSummary, SUMMARY_YES, SUMMARY_NO } from '../session/summary.js';
+import { setTelegramStatus } from '../runtime-state.js';
 
 const HELP_TEXT = [
   '*ads-analytics-bot* — ผู้ช่วยวิเคราะห์ผลประกอบการ',
@@ -274,6 +275,22 @@ async function applySiteChange(ctx, arg) {
 }
 
 export async function launchBot(bot, app) {
+  // Verify the token before wiring anything up. getMe() is the cheapest
+  // definitive check that the token is valid and Telegram is reachable; without
+  // it a bad token leaves the process running and silently deaf, which is much
+  // harder to notice than a startup failure.
+  let me;
+  try {
+    me = await bot.telegram.getMe();
+  } catch (err) {
+    setTelegramStatus({ connected: false, mode: config.telegram.mode, error: err?.message });
+    throw new Error(
+      `Telegram ปฏิเสธ token — ตรวจ TELEGRAM_BOT_TOKEN ใน .env (${err?.message ?? 'unknown error'})`,
+    );
+  }
+
+  logger.info('telegram authorised', { username: me.username, botId: me.id });
+
   if (isWebhookMode()) {
     if (!config.http.publicUrl) throw new Error('TELEGRAM_MODE=webhook requires PUBLIC_URL');
     if (!config.telegram.webhookSecret) throw new Error('TELEGRAM_MODE=webhook requires WEBHOOK_SECRET');
@@ -288,9 +305,18 @@ export async function launchBot(bot, app) {
   } else {
     // Long polling: nothing to expose publicly, which keeps Nginx untouched.
     await bot.telegram.deleteWebhook({ drop_pending_updates: false }).catch(() => {});
+    // launch() only settles once polling stops, so it must not be awaited here.
     bot.launch({ dropPendingUpdates: false }).catch((err) => {
-      logger.error('polling failed', { message: err?.message });
+      setTelegramStatus({ connected: false, error: err?.message });
+      logger.error('polling stopped with an error', { message: err?.message });
     });
     logger.info('telegram polling started');
   }
+
+  setTelegramStatus({
+    connected: true,
+    mode: config.telegram.mode,
+    username: me.username,
+    error: null,
+  });
 }

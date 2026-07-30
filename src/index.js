@@ -46,7 +46,15 @@ async function main() {
     logger.info('shutting down', { signal });
     clearInterval(sweeper);
     clearInterval(pruner);
-    if (!isWebhookMode()) bot.stop(signal);
+    if (!isWebhookMode()) {
+      // Throws "Bot is not running!" if polling never started (bad token, network
+      // failure). Shutdown must still complete, so this is not allowed to throw.
+      try {
+        bot.stop(signal);
+      } catch (err) {
+        logger.warn('bot.stop skipped', { message: err?.message });
+      }
+    }
     server.close(() => {
       closeDb();
       process.exit(0);
