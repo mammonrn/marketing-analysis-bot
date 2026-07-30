@@ -25,25 +25,6 @@ function idList(raw) {
     .filter(Boolean);
 }
 
-function parseSheetsConfig(raw) {
-  if (!raw) return {};
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`env SHEETS_CONFIG is not valid JSON: ${err.message}`);
-  }
-  for (const [site, entry] of Object.entries(parsed)) {
-    if (!entry?.spreadsheetId) {
-      throw new Error(`env SHEETS_CONFIG.${site} is missing "spreadsheetId"`);
-    }
-    if (!entry.tabs || typeof entry.tabs !== 'object') {
-      throw new Error(`env SHEETS_CONFIG.${site} is missing a "tabs" object`);
-    }
-  }
-  return parsed;
-}
-
 const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID || '509832984';
 
 export const config = {
@@ -78,23 +59,16 @@ export const config = {
     sqlitePath: path.resolve(ROOT, process.env.SQLITE_PATH || './data/sessions.sqlite'),
   },
 
-  google: {
-    clientId: process.env.GOOGLE_CLIENT_ID || '',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    refreshToken: process.env.GOOGLE_REFRESH_TOKEN || '',
-    sheets: parseSheetsConfig(process.env.SHEETS_CONFIG),
-    cacheTtlSeconds: int('SHEETS_CACHE_TTL_SECONDS', 300),
+  // Raw Excel files users upload in chat (spec §3B) — replaces the old
+  // Google Sheets/Drive read integration entirely.
+  data: {
+    dir: path.resolve(ROOT, process.env.DATA_DIR || './DATA'),
+    retentionMonths: int('RAW_FILE_RETENTION_MONTHS', 6),
   },
 
   skillDir: SKILL_DIR,
   promptDir: PROMPT_DIR,
 };
-
-/** True when Sheets credentials are complete enough to attempt a read. */
-export function googleConfigured() {
-  const { clientId, clientSecret, refreshToken } = config.google;
-  return Boolean(clientId && clientSecret && refreshToken);
-}
 
 export function isWebhookMode() {
   return config.telegram.mode === 'webhook';

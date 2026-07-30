@@ -4,15 +4,16 @@ node_modules/
 !.env.example
 
 # session store (SQLite) — runtime state, never commit
-data/
+# NOTE: root-anchored (`/data/`) on purpose — a bare `data/` also matches
+# `src/data/` and silently swallowed that whole module once already.
+/data/
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
 
-# Google OAuth artifacts — reused read-only credential from Project 1
-google-credentials.json
-google-token.json
+# raw Excel files uploaded by users (spec §3B) — never commit, retained on disk only
+/DATA/
 
 logs/
 *.log

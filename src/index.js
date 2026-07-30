@@ -6,6 +6,8 @@ import { initDb, findIdleSessions, pruneOldData, closeDb } from './session/store
 import { startIdleSweeper } from './session/summary.js';
 import { createBot, launchBot } from './telegram/bot.js';
 import { createRouter } from './miniapp/routes.js';
+import { initDataDb, closeDataDb } from './data/db.js';
+import { runMonthlyRetentionIfDue } from './data/retention.js';
 
 async function main() {
   // Fail fast and loudly if the skill bundle is incomplete — a bot answering
@@ -19,6 +21,9 @@ async function main() {
 
   initDb();
   pruneOldData();
+
+  initDataDb();
+  runMonthlyRetentionIfDue();
 
   const app = express();
   app.disable('x-powered-by');
@@ -41,11 +46,15 @@ async function main() {
   const sweeper = startIdleSweeper(bot.telegram, { findIdleSessions });
   const pruner = setInterval(() => pruneOldData(), 6 * 60 * 60 * 1000);
   pruner.unref?.();
+  // Daily is frequent enough — runMonthlyRetentionIfDue() itself no-ops on every day but the 1st.
+  const retentionTimer = setInterval(() => runMonthlyRetentionIfDue(), 24 * 60 * 60 * 1000);
+  retentionTimer.unref?.();
 
   const shutdown = (signal) => {
     logger.info('shutting down', { signal });
     clearInterval(sweeper);
     clearInterval(pruner);
+    clearInterval(retentionTimer);
     if (!isWebhookMode()) {
       // Throws "Bot is not running!" if polling never started (bad token, network
       // failure). Shutdown must still complete, so this is not allowed to throw.
@@ -57,6 +66,7 @@ async function main() {
     }
     server.close(() => {
       closeDb();
+      closeDataDb();
       process.exit(0);
     });
     // Do not hang forever if a connection refuses to drain.

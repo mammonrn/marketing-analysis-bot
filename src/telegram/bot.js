@@ -6,7 +6,14 @@ import { sendSafe } from './send.js';
 import { askClaude } from '../claude/client.js';
 import { detectFraudIntent } from '../fraud/guard.js';
 import { detectSite, siteDisplayName, ALL_SITE_KEYS } from '../data/sites.js';
-import { buildDataContext, sheetsStatus, clearSheetsCache } from '../data/sheets.js';
+import { buildDataContext, fileInventory } from '../data/query.js';
+import { getFileType } from '../data/fileTypes.js';
+import {
+  ingestUpload,
+  resolvePendingSite,
+  resolvePendingDuplicate,
+  hasPendingUpload,
+} from '../data/ingest.js';
 import { inspectSkillBundle } from '../prompt/loader.js';
 import {
   getOrCreateSession,
@@ -36,8 +43,122 @@ const HELP_TEXT = [
   '',
   `เว็บที่รองรับ: ${ALL_SITE_KEYS.map(siteDisplayName).join(' / ')}`,
   '',
+  '📎 ส่งไฟล์ Excel (.xlsx) เข้ามาในแชทได้เลยเพื่ออัปโหลดข้อมูลสิ้นเดือน — บอทจะเดาว่าเป็นไฟล์',
+  'ประเภทไหนและเว็บไหนให้เอง ถ้าเดาเว็บไม่ได้จะถามกลับ',
+  '',
   '_บอทจะไม่สร้างกราฟทุกคำถาม — กราฟจะขึ้นตอนสรุปหรือตอนที่จำเป็นจริง ๆ_',
 ].join('\n');
+
+const UPLOAD_CONFIRM_YES = 'upload:yes';
+const UPLOAD_CONFIRM_NO = 'upload:no';
+
+function fileTypeLabel(fileType) {
+  return getFileType(fileType)?.label ?? fileType;
+}
+
+/** Shared by the document handler, the pending-site text reply, and the duplicate-confirm buttons. */
+function respondToUploadResult(ctx, result) {
+  const chatId = ctx.chat.id;
+
+  switch (result.status) {
+    case 'unrecognized':
+      return sendSafe(
+        ctx.telegram,
+        chatId,
+        'ไม่รู้จักรูปแบบไฟล์นี้ครับ — ตรวจว่าเป็น Power BI export ที่มี column ตรงกับที่ระบบรู้จัก ' +
+          '(Daily Value / VIP / New Member Quality / Deposit Count Distribution / Brand Game Value)',
+      );
+    case 'needs_site':
+      return sendSafe(
+        ctx.telegram,
+        chatId,
+        `รับไฟล์ *${fileTypeLabel(result.fileType)}* แล้ว (เดือน ${result.yearMonth}) แต่ไม่แน่ใจว่าเว็บไหนครับ\n` +
+          `พิมพ์ชื่อเว็บมาได้เลย เช่น SH666 / U89 / 88F`,
+      );
+    case 'invalid_site':
+      return sendSafe(
+        ctx.telegram,
+        chatId,
+        `ไม่รู้จักเว็บนี้ครับ — ใช้ได้: ${ALL_SITE_KEYS.map(siteDisplayName).join(' / ')}`,
+      );
+    case 'needs_confirm':
+      return sendSafe(
+        ctx.telegram,
+        chatId,
+        `ไฟล์นี้เหมือนกับที่เคยส่งมาแล้ว (${siteDisplayName(result.site)} เดือน ${result.yearMonth}, ` +
+          `ประเภท ${fileTypeLabel(result.fileType)}, ชื่อไฟล์และขนาดตรงกัน) ต้องการอัปเดตทับไหมครับ`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ ใช่ อัปเดตทับ', callback_data: UPLOAD_CONFIRM_YES },
+                { text: '❌ ไม่ ยกเลิก', callback_data: UPLOAD_CONFIRM_NO },
+              ],
+            ],
+          },
+        },
+      );
+    case 'saved':
+      return sendSafe(
+        ctx.telegram,
+        chatId,
+        `✅ รับไฟล์ *${fileTypeLabel(result.fileType)}* ของ *${siteDisplayName(result.site)}* เดือน ${result.yearMonth} แล้วครับ`,
+      );
+    case 'kept_existing':
+      return sendSafe(ctx.telegram, chatId, 'โอเคครับ ไม่อัปเดตทับไฟล์เดิม');
+    case 'no_pending':
+      return undefined;
+    default:
+      return sendSafe(ctx.telegram, chatId, '⚠️ เกิดข้อผิดพลาดไม่ทราบสาเหตุระหว่างรับไฟล์ครับ');
+  }
+}
+
+async function handleDocumentUpload(ctx) {
+  const chatId = ctx.chat.id;
+  const doc = ctx.message.document;
+  const filename = doc.file_name || 'upload.xlsx';
+
+  if (!/\.xlsx?$/i.test(filename)) {
+    return sendSafe(ctx.telegram, chatId, '⚠️ รองรับเฉพาะไฟล์ Excel (.xlsx) ครับ');
+  }
+
+  await ctx.telegram.sendChatAction(chatId, 'upload_document').catch(() => {});
+
+  let buffer;
+  try {
+    const link = await ctx.telegram.getFileLink(doc.file_id);
+    const res = await fetch(link.href ?? link);
+    if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
+    buffer = Buffer.from(await res.arrayBuffer());
+  } catch (err) {
+    logger.error('failed to download uploaded file', { chatId, message: err?.message });
+    return sendSafe(ctx.telegram, chatId, '⚠️ ดาวน์โหลดไฟล์ไม่สำเร็จ ลองส่งใหม่อีกครั้งครับ');
+  }
+
+  let result;
+  try {
+    result = await ingestUpload({
+      buffer,
+      originalFilename: filename,
+      fileSize: doc.file_size ?? buffer.length,
+      chatId,
+      captionText: ctx.message.caption ?? '',
+    });
+  } catch (err) {
+    logger.error('ingest failed', {
+      chatId,
+      message: err?.message,
+      stack: err?.stack?.split('\n').slice(0, 3).join(' | '),
+    });
+    return sendSafe(
+      ctx.telegram,
+      chatId,
+      '⚠️ อ่านไฟล์ไม่สำเร็จ — ตรวจว่าเป็นไฟล์ Excel export จาก Power BI ที่ถูกต้องครับ',
+    );
+  }
+
+  return respondToUploadResult(ctx, result);
+}
 
 /**
  * Thai slash-commands have to be matched by hand.
@@ -186,7 +307,6 @@ export function createBot() {
       return sendSafe(ctx.telegram, ctx.chat.id, 'คำสั่งนี้ใช้ได้เฉพาะ Super Admin ครับ');
     }
     const skill = inspectSkillBundle();
-    const sheets = sheetsStatus();
     const lines = [
       '*สถานะระบบ*',
       '',
@@ -198,21 +318,34 @@ export function createBot() {
       ...skill.present.map((p) => `✅ ${p.file} — ${p.lines} บรรทัด`),
       ...skill.missing.map((m) => `${m.required ? '🚨' : '⚠️'} ขาด: ${m.file} (${m.label})`),
       '',
-      '*Google Sheets*',
-      `credentials: ${sheets.credentialsConfigured ? '✅ ตั้งค่าแล้ว' : '❌ ยังไม่ได้ตั้งค่า'}`,
-      ...(Object.keys(sheets.sites).length
-        ? Object.entries(sheets.sites).map(([s, v]) => `• ${s}: ${v.tabs.join(', ') || 'ไม่มีแท็บ'}`)
-        : ['• ยังไม่ได้ตั้ง SHEETS_CONFIG']),
+      `*ไฟล์ข้อมูลที่อัปโหลดแล้ว* (retention ${config.data.retentionMonths} เดือน)`,
+      ...ALL_SITE_KEYS.map((site) => {
+        const present = fileInventory(site).filter((i) => i.file);
+        const detail = present.length
+          ? present
+              .map((i) => `${i.label} ${i.file.year_month}${i.file.parsed ? '' : ' (ยังไม่ parse)'}`)
+              .join(', ')
+          : 'ยังไม่มีไฟล์';
+        return `_${siteDisplayName(site)}_: ${detail}`;
+      }),
     ];
     return sendSafe(ctx.telegram, ctx.chat.id, lines.join('\n'));
   });
 
-  bot.command('refresh', async (ctx) => {
-    if (!isSuperAdmin(ctx.from.id)) {
-      return sendSafe(ctx.telegram, ctx.chat.id, 'คำสั่งนี้ใช้ได้เฉพาะ Super Admin ครับ');
-    }
-    clearSheetsCache();
-    return sendSafe(ctx.telegram, ctx.chat.id, '🔄 ล้าง cache ข้อมูล Sheets แล้ว');
+  bot.on('document', handleDocumentUpload);
+
+  bot.action(UPLOAD_CONFIRM_YES, async (ctx) => {
+    await ctx.answerCbQuery('กำลังอัปเดต...').catch(() => {});
+    await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+    const result = resolvePendingDuplicate(ctx.chat.id, true);
+    return respondToUploadResult(ctx, result);
+  });
+
+  bot.action(UPLOAD_CONFIRM_NO, async (ctx) => {
+    await ctx.answerCbQuery('ยกเลิกแล้ว').catch(() => {});
+    await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+    const result = resolvePendingDuplicate(ctx.chat.id, false);
+    return respondToUploadResult(ctx, result);
   });
 
   bot.action(SUMMARY_YES, async (ctx) => {
@@ -230,6 +363,12 @@ export function createBot() {
   bot.on('text', async (ctx) => {
     const text = ctx.message.text?.trim();
     if (!text) return undefined;
+
+    // A file we couldn't guess the site for is waiting on this exact reply (spec §3B step 1).
+    if (hasPendingUpload(ctx.chat.id)) {
+      const result = resolvePendingSite(ctx.chat.id, text);
+      return respondToUploadResult(ctx, result);
+    }
 
     const command = matchThaiCommand(text);
     if (command?.action === 'summary') return runSummary(ctx.telegram, ctx.chat.id);

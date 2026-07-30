@@ -27,7 +27,7 @@ cd /opt
 sudo git clone https://github.com/mammonrn/marketing-analysis-bot.git ads-analytics-bot
 sudo chown -R "$USER":"$USER" ads-analytics-bot
 cd ads-analytics-bot
-git checkout claude/new-session-9kqg5f     # หรือ main หลัง merge แล้ว
+git checkout main     # หรือ branch ที่กำลังทดสอบ ก่อน merge
 npm ci --omit=dev
 ```
 
@@ -55,30 +55,18 @@ nano .env
 | `TELEGRAM_BOT_TOKEN` | BotFather — **คนละตัว** กับ telegram-ads-bot |
 | `ANTHROPIC_API_KEY` | คีย์ที่มีอยู่แล้ว |
 | `ALLOWED_TELEGRAM_IDS` | ID ทีมงาน คั่น comma (Super Admin `509832984` ใส่ให้อัตโนมัติแล้ว) |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` | credential เดียวกับ Project 1 (read-only) |
-| `SHEETS_CONFIG` | JSON แผนผัง spreadsheet ต่อเว็บ — ดูข้อ 4 |
+
+ไม่มี Google/Sheets ให้กรอกแล้ว (spec §3B) — `DATA_DIR`/`RAW_FILE_RETENTION_MONTHS` มีค่า default
+ใช้ได้เลย ผู้ใช้อัปโหลดไฟล์ Excel เข้าแชทบอทเองแทน
 
 ```bash
 chmod 600 .env      # มี API key อยู่ในนั้น
 ```
 
-## 4. SHEETS_CONFIG — ต้องกรอกเอง
-
-โค้ดนี้ไม่รู้ layout ของ Sheets ที่ Project 1 เขียนไว้ จึงทำเป็น config ทั้งหมด
-เอา spreadsheet ID จาก URL: `docs.google.com/spreadsheets/d/`**`<ID>`**`/edit`
+## 4. Start ผ่าน PM2
 
 ```bash
-SHEETS_CONFIG={"shwe666":{"spreadsheetId":"1AbC...","tabs":{"daily":"Daily","newMember":"Daily (1st New & 1st)","count":"Daily (Count)","brandValue":"Brand Value","vip":"Vip"}},"ubet89":{"spreadsheetId":"1DeF...","tabs":{"daily":"Daily"}},"88fed":{"spreadsheetId":"1GhI...","tabs":{"daily":"Daily"}}}
-```
-
-- ชื่อแท็บต้องตรงกับใน Google Sheets **ทุกตัวอักษรและเว้นวรรค**
-- แท็บไหนยังไม่มีก็ไม่ต้องใส่ — บอทจะตอบว่าไม่มีข้อมูลส่วนนั้น ดีกว่าเดา
-- `tabs` ที่รองรับ: `daily`, `newMember`, `count`, `brandValue`, `vip`
-
-## 5. Start ผ่าน PM2
-
-```bash
-mkdir -p logs data
+mkdir -p logs data DATA
 pm2 start ecosystem.config.cjs
 pm2 logs ads-analytics-bot --lines 40
 ```
@@ -105,7 +93,7 @@ pm2 logs ads-analytics-bot --lines 40
 pm2 save        # ให้รอดหลัง reboot
 ```
 
-## 6. เช็คว่าเข้าถึงได้
+## 5. เช็คว่าเข้าถึงได้
 
 ```bash
 curl -s localhost:3001/healthz | python3 -m json.tool            # จากบน VPS
@@ -124,16 +112,19 @@ npm run smoke                                                     # เช็ค
 ถ้า curl ผ่าน Nginx ไม่ได้ ให้เทียบกับ `deploy/nginx-analytics.conf` แล้ว
 `sudo nginx -t && sudo systemctl reload nginx`
 
-## 7. ทดสอบใน Telegram
+## 6. ทดสอบใน Telegram
 
 1. ทักบอท → `/start` (ถ้าไม่ใช่ ID ใน whitelist ต้องถูกปฏิเสธ — ทดสอบด้วย)
 2. `/whoami` → ต้องเห็น ID ตัวเอง + `Super Admin`
-3. `/status` → เช็คว่า skill files ครบ + Sheets เชื่อมแล้ว
-4. ถามคำถามจริง: `RTP ของ SH666 เดือนนี้เป็นยังไง`
+3. ส่งไฟล์ Excel export จริง 1 ไฟล์ (เช่น Daily Value ของ SH666 เดือนล่าสุด) เข้าแชท
+   - ควรได้ข้อความยืนยันว่ารับไฟล์ประเภทอะไร เดือนไหน เว็บไหนแล้ว
+   - ถ้าเดาเว็บไม่ได้ บอทจะถามกลับ — พิมพ์ชื่อเว็บ (เช่น `SH666`) ตอบไปได้เลย
+4. `/status` → เช็คว่า skill files ครบ + เห็นไฟล์ที่เพิ่งอัปโหลดอยู่ในรายการ
+5. ถามคำถามจริง: `RTP ของ SH666 เดือนนี้เป็นยังไง`
    - ต้องได้ข้อความ 4 ส่วน (ตัวเลข+สถานะ / ข้อดี / ข้อเสีย / คำแนะนำ)
    - **ต้องไม่มีกราฟ** — นี่คือกฎ spec §6
-5. `/สรุป` → ต้องได้ข้อความสรุป + ปุ่ม 📊 เปิด Dashboard → กดแล้วกราฟขึ้น
-6. ถาม fraud: `U89 มี referrer ผิดปกติไหม` → ต้องได้ครบ 5 หัวข้อ และ**ไม่ฟันธง**ว่าใครโกง
+6. `/สรุป` → ต้องได้ข้อความสรุป + ปุ่ม 📊 เปิด Dashboard → กดแล้วกราฟขึ้น
+7. ถาม fraud: `U89 มี referrer ผิดปกติไหม` → ต้องได้ครบ 5 หัวข้อ และ**ไม่ฟันธง**ว่าใครโกง
 
 ---
 
@@ -181,7 +172,8 @@ grep -c '"level":"error"' logs/error.log
 | ไม่ start, `Missing required env var` | ยังไม่กรอก `.env` ให้ครบ |
 | ไม่ start, `Telegram ปฏิเสธ token` | `TELEGRAM_BOT_TOKEN` ผิด/ถูก revoke — ขอใหม่จาก BotFather |
 | ตอบแบบ Full Report / ยัด HTML มาให้ | `SKILL.md` เป็นเวอร์ชันเก่า → `npm test` จะจับให้ (เทสเช็คหัวข้อ "โหมดการตอบ") |
-| ตอบว่า "ยังไม่ได้เชื่อมข้อมูล" ทุกคำถาม | `SHEETS_CONFIG` ผิด / ชื่อแท็บไม่ตรง / refresh token หมดอายุ |
+| ตอบว่า "ยังไม่มีข้อมูล" ทุกคำถาม | ยังไม่มีใครอัปโหลดไฟล์ประเภท/เดือนนั้นสำหรับเว็บนี้ — เช็คด้วย `/status` |
+| ไฟล์ที่ส่งเข้าไปขึ้น "ไม่รู้จักรูปแบบไฟล์นี้" | column header ไม่ตรงกับที่ระบบรู้จัก (`src/data/fileTypes.js`) — ตรวจว่าเป็น Power BI export จริง |
 | ปุ่ม Dashboard กดแล้วขึ้น "ลิงก์หมดอายุ" | token อายุ 1 ชม. — สั่ง `/สรุป` ใหม่ |
 | ไม่มีปุ่ม Dashboard เลย | `PUBLIC_URL` ไม่ได้ตั้ง (ดู log `PUBLIC_URL not set`) |
 | กราฟไม่ขึ้นในทุกคำถาม | ไม่ใช่บั๊ก — spec §6 บังคับให้เป็นแบบนี้ |

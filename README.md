@@ -3,8 +3,8 @@
 Telegram bot ที่ให้ทีมงานถามคำถามภาษาไทยเกี่ยวกับผลประกอบการเว็บ **SH666 / U89 / 88F**
 แล้วตอบด้วยตัวเลข + สถานะ + คำแนะนำ พร้อม dashboard สรุปท้าย session
 
-Project 2 ต่อยอดจาก `telegram-ads-bot` (Project 1) — บอทนี้ **อ่าน** Google Sheets ชุดเดียวกัน
-แบบ read-only ไม่เขียนกลับ
+Project 2 ต่อยอดจาก `telegram-ads-bot` (Project 1) แต่มีแหล่งข้อมูลของตัวเอง — **ทีมงานอัปโหลดไฟล์
+Excel ดิบเข้าแชทบอทโดยตรงทุกสิ้นเดือน** (spec §3B) ไม่ใช้ Google Sheets/Drive ร่วมกับ Project 1
 
 📖 **วิธี deploy → [`deploy/DEPLOY.md`](deploy/DEPLOY.md)**
 
@@ -12,18 +12,17 @@ Project 2 ต่อยอดจาก `telegram-ads-bot` (Project 1) — บอ�
 
 ## สถานะปัจจุบัน
 
-โค้ดครบตาม scope v1 และ **skill files ครบทั้ง 9 ไฟล์แล้ว** (ตรงกับ Google Drive ทุกไบต์ — ดู
-`skills/thai-data-analyst/MANIFEST.json`) บอท start ได้ เหลืออย่างเดียวก่อนใช้งานจริง:
+โค้ดครบตาม scope v1 (รวม file ingestion ตาม spec §3B) และ **skill files ครบทั้ง 9 ไฟล์แล้ว**
+(ตรงกับ Google Drive ทุกไบต์ — ดู `skills/thai-data-analyst/MANIFEST.json`) บอท start ได้เลย
+ไม่ต้องเติม config อะไรเพิ่มนอกจาก token/API key พื้นฐาน
 
-| ต้องเติม | ทำไม |
-|---|---|
-| `SHEETS_CONFIG` ใน `.env` | โค้ดไม่รู้ layout ของ Sheets จาก Project 1 — ต้องกรอก spreadsheet ID + ชื่อแท็บเอง |
-
-**ยังไม่ได้ deploy** — VPS เข้าไม่ได้จาก environment ที่เขียนโค้ดนี้ (ดู `deploy/DEPLOY.md`)
+> **แก้ไขจากรุ่นก่อน**: `.gitignore` เดิมมี `data/` (ไม่มี `/` นำหน้า) ซึ่งดันไปกลืน `src/data/`
+> ด้วย ทำให้โมดูล site-normalization/ข้อมูลของรุ่นก่อนหน้าไม่เคย commit เข้า git และหายไปตอน
+> container ถูกเก็บกวาด — เปลี่ยนเป็น `/data/` (root-only) แล้ว ห้ามแก้กลับ
 
 ```bash
 npm run check:skill    # ต้องได้ "✅ พร้อม deploy" (9/9 ไฟล์)
-npm test               # 57 unit tests
+npm test               # unit tests (sites/transform/fileTypes/query/ingest/fraud/envelope/...)
 npm run smoke          # เช็คว่า Mini App เสิร์ฟได้ครบทุก route
 ```
 
@@ -38,11 +37,33 @@ Telegram user
 telegraf (polling หรือ webhook)
    ├─ whitelist            src/telegram/auth.js       ปฏิเสธคนที่ไม่อยู่ในลิสต์ก่อนเสีย API call
    ├─ session (SQLite)     src/session/store.js       จำเว็บล่าสุด + ทุก turn + idle clock
-   ├─ Google Sheets        src/data/sheets.js         read-only, cache 5 นาที
+   ├─ file ingestion       src/data/ingest.js         รับไฟล์ Excel → เก็บดิบ + metadata (spec §3B)
+   ├─ parse-on-demand      src/data/parse.js          แปลงไฟล์ → parsed_rows เฉพาะตอนมีคำถามใช้จริง
+   ├─ data context         src/data/query.js          เลือก file_type ตามคำถาม + format ให้ Claude
    ├─ Anthropic            src/claude/client.js       system prompt = ไฟล์ skill ต่อกันแบบ verbatim
    │    └─ fraud guard     src/fraud/guard.js         บังคับโครงสร้าง 5 ส่วน + กันการฟันธง
    └─ Mini App             src/miniapp/routes.js      Chart.js (vendored) ผ่าน token ใช้ครั้งเดียว
 ```
+
+### File ingestion (spec §3B) — แทนที่ Google Sheets เดิม
+
+ผู้ใช้ส่งไฟล์ `.xlsx` เข้าแชทได้เลย บอทจะ:
+
+1. เดา **ประเภทไฟล์** จาก column header (`src/data/fileTypes.js` เป็น source of truth เดียว —
+   `Last BIn 2 Y`→VIP, `1st New%`→New Member Quality, `GameKind`→Brand/Game Value,
+   `21+ Counts`→Deposit Count Distribution, มี `RTP`+`BIn`+`DAU`→Daily Value)
+2. เดา **เว็บ** จากข้อความ/แคปชันที่แนบมา หรือชื่อไฟล์ ผ่าน `normalizeSiteName()` เดียว
+   (`src/data/sites.js`, ตาราง alias อยู่ที่ `config/site-aliases.json`) — เดาไม่ได้จะถามกลับ
+3. เดา **เดือนที่ข้อมูลนี้เป็นของเดือนไหน** จาก column วันที่ในไฟล์เอง (ถ้ามี) หรือจากข้อความที่แนบมา
+   ไม่งั้น fallback เป็นเดือนก่อนหน้าเดือนที่อัปโหลด (`src/data/ingest.js`)
+4. เก็บไฟล์ดิบที่ `DATA/{SITE}/{YYYY}/{MM}/{file_type}_{timestamp}.xlsx` + metadata ใน SQLite
+   ตาราง `raw_files` — ไฟล์ซ้ำ (site+เดือน+ประเภทตรงกัน **และ** ชื่อไฟล์+ขนาดตรงกัน) จะถามก่อน
+   ทับ ส่วนไฟล์ที่ต่างกันแค่ชื่อ/ขนาดถือเป็นอัปเดต บันทึกทับเงียบ ๆ (spec §3B/§10)
+5. Parse จริง (`src/data/parse.js`) เกิดขึ้นครั้งแรกที่มีคำถามต้องใช้ไฟล์นั้นเท่านั้น แล้ว cache ไว้ใน
+   ตาราง `parsed_rows` (schema เดียวกันทุก file type — เก็บแถวดิบเป็น JSON แล้วให้
+   `transform.js` แปลงหน่วย/สกุลเงินตอน query แทนที่จะ hard-code คอลัมน์ต่อ file type)
+6. Retention: ลบไฟล์ดิบ (ไม่ลบ `parsed_rows`) ที่เก่ากว่า `RAW_FILE_RETENTION_MONTHS` เดือน
+   (default 6) — เช็คทุกวัน ทำงานจริงเฉพาะวันที่ 1 (`src/data/retention.js`)
 
 ### system prompt ประกอบจากไฟล์ ไม่ได้เขียนเอง
 
@@ -100,12 +121,12 @@ git add skills/ && git commit -m "sync: update skill" && git push
 
 | คำสั่ง | ทำอะไร |
 |---|---|
+| ส่งไฟล์ `.xlsx` | อัปโหลดข้อมูลสิ้นเดือน — บอทเดาประเภทไฟล์/เว็บ/เดือนให้ (spec §3B) |
 | พิมพ์คำถามเลย | ตอบ 4 ส่วน: ตัวเลข+สถานะ / ข้อดี / ข้อเสีย / คำแนะนำ |
 | `/สรุป` `/จบ` | สรุป session + ปุ่มเปิด dashboard แล้วเคลียร์ session |
 | `/เว็บ SH666` | เปลี่ยนเว็บที่กำลังคุย (ปกติบอทจำเว็บล่าสุดให้อยู่แล้ว) |
 | `/whoami` | ดู Telegram ID ตัวเอง |
-| `/status` | (Super Admin) เช็ค skill files + Sheets + config |
-| `/refresh` | (Super Admin) ล้าง cache Sheets |
+| `/status` | (Super Admin) เช็ค skill files + ไฟล์ข้อมูลที่อัปโหลดแล้วต่อเว็บ/ประเภท |
 
 `/สรุป` กับ `/จบ` เป็นภาษาไทย Telegram จึงไม่ tag เป็น bot_command — จับใน text handler
 (`/summary`, `/end` ใช้ได้เหมือนกัน)
@@ -128,7 +149,13 @@ spec §9 ตั้งคำถามสถาปัตยกรรมไว้ 5
 **เปลี่ยน telegram library**: spec ไม่ได้ระบุตัวไหน — ใช้ `telegraf` แทน `node-telegram-bot-api`
 เพราะตัวหลังลาก `request` (deprecated) มาด้วยและมี 2 critical CVE ตอนนี้เหลือ 0 critical / 0 high
 
----
+### Decisions เพิ่มเติมจาก file ingestion (spec §3B)
+
+| หัวข้อ | ที่เลือก | เหตุผล |
+|---|---|---|
+| ไลบรารีอ่าน `.xlsx` | `exceljs` | `xlsx`/SheetJS หยุด publish เวอร์ชันใหม่ขึ้น npm ตามปกติแล้ว (ต้องดึงจาก CDN ของเขาเอง) — `exceljs` ยัง publish บน npm ปกติ, MIT license |
+| schema ตาราง parsed | ตารางเดียว `parsed_rows` (คอลัมน์ `site`/`file_type`/`year_month`/`row_date`/`row_json`) แทนตารางแยกต่อ file type | คอลัมน์จริงในไฟล์มี 15–30 คอลัมน์ต่อ file type และเปลี่ยนได้ตามที่ Power BI export เพิ่ม — เก็บเป็น JSON ตามชื่อคอลัมน์เดิม แล้วให้ `transform.js` (`normaliseRow`/`deriveMetrics`) แปลงหน่วยตอน query ใช้ shape เดียวกับที่เทสอยู่แล้ว ไม่ต้อง hard-code SQL column ต่อ file type |
+| เดือนของข้อมูล (`year_month`) เมื่อไฟล์ไม่มี column วันที่ (VIP, Brand/Game Value) | หาจากข้อความ/แคปชันที่แนบมาก่อน (`2026-06`, `มิถุนายน`) ไม่งั้น fallback เป็นเดือนก่อนหน้าเดือนอัปโหลด | spec ไม่ได้ระบุไว้ตรง ๆ — ตัวอย่าง path ในสเปคเอง (`.../2026/06/..._20260701...`) บ่งบอกว่าอัปโหลดวันที่ 1 ก.ค. แต่เก็บเป็นข้อมูลเดือน มิ.ย. ตรงกับ pattern "อัปโหลดข้อมูลที่เพิ่งจบเดือน" |
 
 ## Phase 2 (ยังไม่ทำ ตาม spec §8)
 

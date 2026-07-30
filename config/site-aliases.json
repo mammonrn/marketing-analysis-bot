@@ -1,0 +1,23 @@
+{
+  "shwe666": {
+    "displayName": "SH666",
+    "aliases": ["SH666", "SHWE666", "shwe666"],
+    "currency": "MMK",
+    "moneyFactor": 787,
+    "referenceFile": "casino-metrics.md"
+  },
+  "ubet89": {
+    "displayName": "U89",
+    "aliases": ["U89", "UB89", "ubet89"],
+    "currency": "THB",
+    "moneyFactor": 1000,
+    "referenceFile": "u89-metrics.md"
+  },
+  "88fed": {
+    "displayName": "88F",
+    "aliases": ["88F", "88fed", "88FED"],
+    "currency": "THB",
+    "moneyFactor": 1000,
+    "referenceFile": "88fed-metrics.md"
+  }
+}
