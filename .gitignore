@@ -1,0 +1,20 @@
+node_modules/
+.env
+.env.*
+!.env.example
+
+# session store (SQLite) — runtime state, never commit
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Google OAuth artifacts — reused read-only credential from Project 1
+google-credentials.json
+google-token.json
+
+logs/
+*.log
+npm-debug.log*
+.DS_Store
