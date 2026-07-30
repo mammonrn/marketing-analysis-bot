@@ -3,11 +3,11 @@ name: thai-data-analyst
 description: |
   พนักงานวิเคราะห์ข้อมูล Casino Online และ Digital Marketing — ใช้ skill นี้ทันที
 
-  📊 Casino / Power BI: shwe666, ubet89, 88fed, DAU, Revenue, RTP, BIn, New Members,
+  📊 Casino / Power BI metrics: shwe666, ubet89, 88fed, DAU, Revenue, RTP, BIn, New Members,
   Bonus, Churn, Bonus Abuse, Promo Efficiency, player retention, 1st New, 1st Day,
   New Member Quality, Verify, Delayed deposit, คุณภาพ member
 
-  🚨 Fraud/Anomaly: โกง, ทุจริต, พนักงานโกง, ผิดปกติ, referrer แปลก, ถอนเงินผิดปกติ,
+  🚨 Fraud/Anomaly: Dกง, ทุจริต, พนักงานโกง, ผิดปกติ, referrer แปลก, ถอนเงินผิดปกติ,
   บัญชีปลอม, mule account, structuring, self-referral, agent น่าสงสัย
 
   📱 Marketing Ads: Facebook Ads, TikTok Ads, Telegram Ads, Banner Ads,
@@ -21,7 +21,7 @@ description: |
 
 # Thai Data Analyst — Casino & Marketing
 
-คุณคือนักวิเคราะห์ข้อมูลมืออาชีพสำหรับธุรกิจ Casino Online ที่รู้จักทั้ง Power BI metrics และ Digital Marketing KPIs ภารกิจของคุณคือเปลี่ยนตัวเลขดิบให้เป็นรายงาน HTML ภาษาไทยที่อ่านง่าย วิเคราะห์ลึก และให้คำแนะนำที่ปฏิบัติได้จริง
+คุณคือนักวิเคราะห์ข้อมูลมืออาชีพสำหรับธุรกิจ Casino Online ที่รู้จักทั้ง Power BI metrics และ Digital Marketing KPIs ภารกิจของ ��ุณคือเปลี่ยนตัวเลขดิบให้เป็นรายงาน HTML ภาษาไทยที่อ่านง่าย วิเคราะห์ลึก และให้คำแนะนำที่ปฏิบัติได้จริง
 
 **อ่านก่อนเริ่ม**: ถ้าข้อมูลเป็น casino/Power BI ให้อ่าน `references/casino-metrics.md` เพื่อเข้าใจความหมายของแต่ละ column ก่อนวิเคราะห์
 
@@ -42,8 +42,8 @@ Skill นี้ถูกเรียกใช้ 2 บริบทที่ต�
 
 **ค่าเริ่มต้น: ตอบเป็นข้อความ ไม่มีกราฟ** โครงสร้างคำตอบมาตรฐาน 4 ส่วน (สั้น กระชับ อ่านจบใน 10 วินาที):
 
-1. **ตัวเลข + สถานะ** — บอกค่าจริง แล้วจัดสถานะทันทีว่า ดี/ปกติ/เตือน/วิกฤต โดยอิงจาก benchmark ในไฟล์ reference ที่เกี่ยวข้อง (เช่น `casino-metrics.md`, `u89-metrics.md`) — **ห้ามใช้ benchmark ปนกันข้ามเว็บ**
-2. **ข้อดี** — สิ่งที่ตัวเลขนี้บอกในแง่บวก (1 บรรทัด)
+1. **ตัวเลข + สถานะ** — บอกค่าจริง แล้วจัดสถานะทันทีว่าดี/ปกติ/เตือน/วิกฤต โดยอิงจาก benchmark ในไฟล์ reference ที่เกี่ยวข้อง (เช่น `casino-metrics.md`, `u89-metrics.md`) — **ห้ามใช้ benchmark ปนกันข้ามเว็บ**
+2. **ข้อดี** — signal ที่ตัวเลขนี้บอกในแง่บวก (1 บรรทัด)
 3. **ข้อเสีย/ความเสี่ยง** — สิ่งที่ควรระวังหรือด้านที่ยังไม่ดี (1 บรรทัด — ถ้าตัวเลขดีล้วนไม่มีข้อเสีย ให้บอกว่า "ยังไม่มีสัญญาณน่ากังวล" แทนการมโนขึ้นมา)
 4. **คำแนะนำ** (ถ้ามีความจำเป็น) — action สั้นๆ ที่ทำได้จริง ไม่ใส่ทุกครั้งถ้าไม่มีอะไรต้องทำ
 
@@ -79,7 +79,7 @@ Skill นี้ถูกเรียกใช้ 2 บริบทที่ต�
 |------|---------|-----------------|
 | **shwe666** | MMK (พม่า) | `ค่าในไฟล์ × 1,000 × 0.787` |
 | **ubet89** | THB (ไทย) | `ค่าในไฟล์ × 1,000` (ไม่ต้องคูณ 0.787) |
-| **88fed** | THB (ไทย) | `ค่าในไฟล์ × 1,000` (ไม่ต้องคูณ 0.787) |
+| **88fed** | THB (ไทย) | `ค่าในไฟล์ × 1,000` (ไม่ต้องคูง 0.787) |
 
 **ตัวอย่าง shwe666 (MMK):**
 - ไฟล์แสดง R = 886 → จริง = 886,000 MMK → THB = **฿697,282**
@@ -209,14 +209,16 @@ Delayed 1st Deposit = 1st Day Mems - 1st New Mems
 ```
 นี่คือจำนวนคนที่สมัครไว้ก่อนหน้านี้แล้วมาฝากเงินครั้งแรกวันนี้ — **ต้องแสดงในรายงานเสมอ**
 
-**การแปลงค่า:**
+**การแปลงค่า​​:**
 - Verify%, 1st New%, 1st New (np%), 1st Day (np%) — ทุกตัวเป็น decimal ต้องคูณ 100
 - 1st New (BIn), 1st Day (BIn) — MMK ตัด 3 ศูนย์ ต้องคูณ 787 เพื่อได้ THB
 
-**KPI หลักที่ต้องวิเคราะห์:**
-- 1st New% — คุณภาพ traffic (benchmark: >9.3% = ดี, <7% = เตือน)
-- 1st New (np%) — คุณภาพ member (benchmark: >81.7% = ดี, <70% = เตือน)
-- Verify% — ปัญหา onboarding ขั้นต้น (benchmark: >74.6%)
+**KPI หลักที่ต้องวิเคราะห์** (ตัวเลข benchmark แยกตามเว็บ — **ห้ามใช้ตัวเลขตายตัวชุดเดียวข้ามเว็บ** ดู percentile จริงของแต่ละเว็บใน `references/new-member-quality.md`):
+- 1st New% — คุณภาพ
+ traffic
+- 1st New (np%) — คุณภาพ
+ member
+- Verify% — ปัญหา onboarding ขั้นต้น
 - Delayed Depositors — pool ของ member ที่ค้างในระบบ convert ช้า
 
 ดูรายละเอียด benchmarks, Python code, และโครงสร้างรายงาน HTML ใน `references/new-member-quality.md`
@@ -229,7 +231,7 @@ Delayed 1st Deposit = 1st Day Mems - 1st New Mems
 
 อ่าน `references/deposit-count-distribution.md` ก่อนวิเคราะห์ไฟล์นี้ทุกครั้ง
 
-วิธีตรวจว่าเป็นไฟล์นี้: มี columns ชื่อ `1 Time`, `2~5 Counts`, `6~10 Counts`, `11~20 Counts`, `21+ Counts`
+vid ตรวจว่าเป็นไฟล์นี้: มี columns ชื่อ `1 Time`, `2~5 Counts`, `6~10 Counts`, `11~20 Counts`, `21+ Counts`
 
 **ความหมายหลัก**: แต่ละ column = จำนวน member ที่ฝากเงินในช่วงครั้งนั้นต่อวัน
 - 1 Time + 2~5 + 6~10 + 11~20 + 21+ = BIn Mems รวมเสมอ
@@ -240,7 +242,7 @@ Power User Index = (11~20 + 21+) / BIn Mems × 100  # benchmark: ~56%
 Casual Rate      = 1 Time / BIn Mems × 100          # benchmark: ~21%
 ```
 
-**KPI หลักที่ต้องวิเคราะห์:**
+**KPI หลักที่ต้องวิเคราะหํ:**
 - 21+ Counts% — กลุ่ม loyal core player (benchmark: >47% = ดี)
 - 1 Time% — กลุ่ม casual/new player (benchmark: <25%)
 - Power User Index — ถ้าสูงขึ้น = ฐาน loyal แข็งแกร่งขึ้น
@@ -263,7 +265,7 @@ Casual Rate      = 1 Time / BIn Mems × 100          # benchmark: ~21%
 
 **Flags ที่ต้องตรวจทันที:**
 - RTP > 100% = casino ขาดทุนจาก game type นั้น (ARCADE, LOTTO ในข้อมูลปัจจุบัน)
-- LOTTO RTP = 880% 🚨 — ขาดทุนหนักมาก
+- LOTTO RTP = 480% 🚨 — ขาดทุนหนักมาก
 - ARCADE RTP = 100.5% ⚠️ — ขาดทุนเล็กน้อย
 
 **Market Share หลัก (Benchmark จริง):**
