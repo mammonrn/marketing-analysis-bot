@@ -57,6 +57,66 @@ function fileTypeLabel(fileType) {
   return getFileType(fileType)?.label ?? fileType;
 }
 
+const DUPLICATE_KEYBOARD = {
+  reply_markup: {
+    inline_keyboard: [
+      [
+        { text: '✅ ใช่ อัปเดตทับ', callback_data: UPLOAD_CONFIRM_YES },
+        { text: '❌ ไม่ ยกเลิก', callback_data: UPLOAD_CONFIRM_NO },
+      ],
+    ],
+  },
+};
+
+/**
+ * Reports on a whole batch at once.
+ *
+ * A single site name (or a single yes/no) now answers for every file that was
+ * waiting, so the reply has to account for all of them — a per-file message
+ * would be eleven notifications for one answer.
+ */
+function respondToBatchResult(ctx, batch) {
+  const chatId = ctx.chat.id;
+  if (batch.status !== 'resolved') return respondToUploadResult(ctx, batch);
+
+  const results = batch.results ?? [];
+  const saved = results.filter((r) => r.status === 'saved');
+  const needsConfirm = results.filter((r) => r.status === 'needs_confirm');
+  const kept = results.filter((r) => r.status === 'kept_existing');
+  const failed = results.filter((r) => r.status === 'missing_temp');
+
+  const lines = [];
+
+  if (saved.length > 0) {
+    const site = siteDisplayName(saved[0].site);
+    lines.push(`✅ บันทึก *${saved.length}* ไฟล์ของ *${site}* แล้วครับ`);
+    lines.push(...saved.map((r) => `• ${fileTypeLabel(r.fileType)} — ${r.yearMonth}`));
+  }
+
+  if (kept.length > 0) {
+    lines.push('', `↩️ ไม่อัปเดตทับ ${kept.length} ไฟล์ (เก็บของเดิมไว้)`);
+  }
+
+  if (failed.length > 0) {
+    lines.push('', `⚠️ อ่านไฟล์ที่พักไว้ไม่ได้ ${failed.length} ไฟล์ — รบกวนส่งใหม่ครับ`);
+    lines.push(...failed.map((r) => `• ${r.originalFilename}`));
+  }
+
+  if (needsConfirm.length > 0) {
+    lines.push(
+      '',
+      `⚠️ อีก *${needsConfirm.length}* ไฟล์เหมือนกับที่เคยส่งมาแล้ว (ชื่อไฟล์และขนาดตรงกัน)`,
+      ...needsConfirm.map((r) => `• ${fileTypeLabel(r.fileType)} — ${r.yearMonth}`),
+      '',
+      'ต้องการอัปเดตทับไหมครับ',
+    );
+    return sendSafe(ctx.telegram, chatId, lines.join('\n'), DUPLICATE_KEYBOARD);
+  }
+
+  if (lines.length === 0) return undefined;
+  return sendSafe(ctx.telegram, chatId, lines.join('\n'));
+}
+
 /** Shared by the document handler, the pending-site text reply, and the duplicate-confirm buttons. */
 function respondToUploadResult(ctx, result) {
   const chatId = ctx.chat.id;
@@ -94,16 +154,7 @@ function respondToUploadResult(ctx, result) {
         chatId,
         `ไฟล์นี้เหมือนกับที่เคยส่งมาแล้ว (${siteDisplayName(result.site)} เดือน ${result.yearMonth}, ` +
           `ประเภท ${fileTypeLabel(result.fileType)}, ชื่อไฟล์และขนาดตรงกัน) ต้องการอัปเดตทับไหมครับ`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '✅ ใช่ อัปเดตทับ', callback_data: UPLOAD_CONFIRM_YES },
-                { text: '❌ ไม่ ยกเลิก', callback_data: UPLOAD_CONFIRM_NO },
-              ],
-            ],
-          },
-        },
+        DUPLICATE_KEYBOARD,
       );
     case 'saved':
       return sendSafe(
@@ -366,15 +417,13 @@ export function createBot() {
   bot.action(UPLOAD_CONFIRM_YES, async (ctx) => {
     await ctx.answerCbQuery('กำลังอัปเดต...').catch(() => {});
     await ctx.editMessageReplyMarkup(undefined).catch(() => {});
-    const result = resolvePendingDuplicate(ctx.chat.id, true);
-    return respondToUploadResult(ctx, result);
+    return respondToBatchResult(ctx, resolvePendingDuplicate(ctx.chat.id, true));
   });
 
   bot.action(UPLOAD_CONFIRM_NO, async (ctx) => {
     await ctx.answerCbQuery('ยกเลิกแล้ว').catch(() => {});
     await ctx.editMessageReplyMarkup(undefined).catch(() => {});
-    const result = resolvePendingDuplicate(ctx.chat.id, false);
-    return respondToUploadResult(ctx, result);
+    return respondToBatchResult(ctx, resolvePendingDuplicate(ctx.chat.id, false));
   });
 
   bot.action(SUMMARY_YES, async (ctx) => {
@@ -395,8 +444,7 @@ export function createBot() {
 
     // A file we couldn't guess the site for is waiting on this exact reply (spec §3B step 1).
     if (hasPendingUpload(ctx.chat.id)) {
-      const result = resolvePendingSite(ctx.chat.id, text);
-      return respondToUploadResult(ctx, result);
+      return respondToBatchResult(ctx, resolvePendingSite(ctx.chat.id, text));
     }
 
     const command = matchThaiCommand(text);

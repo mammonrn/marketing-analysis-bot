@@ -72,9 +72,15 @@ test('a file with no site clue asks, then resolves on the next reply — folder 
   // Majority of the rows' Date column is June 2026.
   assert.equal(asked.yearMonth, '2026-06');
 
-  const resolved = ingest.resolvePendingSite('chat-2', 'SH666');
+  // One reply resolves the whole queue, so the answer is a batch even when
+  // only a single file was waiting.
+  const batch = ingest.resolvePendingSite('chat-2', 'SH666');
+  assert.equal(batch.status, 'resolved');
+  assert.equal(batch.site, 'shwe666');
+  assert.equal(batch.results.length, 1);
+
+  const resolved = batch.results[0];
   assert.equal(resolved.status, 'saved');
-  assert.equal(resolved.site, 'shwe666');
 
   const normalised = resolved.row.path.replace(/\\/g, '/');
   assert.match(normalised, /SH666\/2026\/06\/daily_value_[0-9a-f]+\.xlsx$/);
@@ -116,7 +122,9 @@ test('re-uploading the identical file asks to confirm before overwriting', async
   assert.equal(second.status, 'needs_confirm');
 
   const confirmed = ingest.resolvePendingDuplicate('chat-4', true);
-  assert.equal(confirmed.status, 'saved');
+  assert.equal(confirmed.status, 'resolved');
+  assert.equal(confirmed.results.length, 1);
+  assert.equal(confirmed.results[0].status, 'saved');
 });
 
 test('declining the duplicate confirm keeps the existing file untouched', async () => {
@@ -138,7 +146,9 @@ test('declining the duplicate confirm keeps the existing file untouched', async 
   assert.equal(dup.status, 'needs_confirm');
 
   const declined = ingest.resolvePendingDuplicate('chat-5', false);
-  assert.equal(declined.status, 'kept_existing');
+  assert.equal(declined.status, 'resolved');
+  assert.equal(declined.results.length, 1);
+  assert.equal(declined.results[0].status, 'kept_existing');
   assert.ok(fs.existsSync(path.join(ROOT, first.row.path)), 'original file still on disk');
 });
 
