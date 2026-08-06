@@ -23,11 +23,14 @@ module.exports = {
       restart_delay: 4000,
 
       // The VPS has 3.8GB, ~2.5GB of it free, shared with telegram-ads-bot.
-      // 400M was low enough that one large upload tripped a restart mid-work;
-      // reading a 120k-row workbook peaks around 300MB even after the
-      // header-only file-type check, so 1G leaves margin for bigger files
-      // while still fitting both bots in what is free.
-      max_memory_restart: '1G',
+      //
+      // Measured on the real 6MB/150k-row "Detail (Last 6 Months)" export:
+      // peak RSS 955-998MB for the whole process, worker thread included.
+      // That is already at 1G, and it was measured in a bare harness with no
+      // system prompt, session store or Telegram client resident, so the live
+      // bot sits higher. 1.5G leaves roughly a third in hand and still fits
+      // both bots inside what is free.
+      max_memory_restart: '1.5G',
 
       env: {
         NODE_ENV: 'production',

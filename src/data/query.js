@@ -66,7 +66,7 @@ function formatContext({ site, fileType, availableMonths, rows }) {
  * uploaded yet for that site/file-type — the caller (spec §6/§3B layer 2)
  * turns `null` into "ยังไม่มีข้อมูลนี้ ขอให้ upload เพิ่ม" rather than guessing.
  */
-export async function buildDataContext(site, question, { monthsBack = 3 } = {}) {
+export async function buildDataContext(site, question, { monthsBack = 3, onProgress } = {}) {
   const fileType = pickFileType(question);
   const candidateMonths = lastNYearMonths(monthsBack);
   const availableMonths = candidateMonths.filter((ym) => findRawFile({ site, yearMonth: ym, fileType }));
@@ -75,7 +75,16 @@ export async function buildDataContext(site, question, { monthsBack = 3 } = {}) 
 
   for (const yearMonth of availableMonths) {
     try {
-      await ensureParsed({ site, yearMonth, fileType });
+      // The first question after a big upload is the one that pays for
+      // parsing it, so progress has to reach the asker here too.
+      await ensureParsed({
+        site,
+        yearMonth,
+        fileType,
+        onProgress: onProgress
+          ? (update) => onProgress({ ...update, label: getFileType(fileType)?.label ?? fileType })
+          : undefined,
+      });
     } catch (err) {
       logger.error('failed to parse raw file on demand', { site, yearMonth, fileType, message: err?.message });
     }

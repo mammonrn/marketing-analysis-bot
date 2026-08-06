@@ -3,6 +3,7 @@ import { config, isWebhookMode } from '../config.js';
 import { logger } from '../logger.js';
 import { whitelistMiddleware, isSuperAdmin } from './auth.js';
 import { sendSafe } from './send.js';
+import { startProgressReporter } from './progress.js';
 import { askClaude } from '../claude/client.js';
 import { detectFraudIntent } from '../fraud/guard.js';
 import { detectSite, siteDisplayName, ALL_SITE_KEYS } from '../data/sites.js';
@@ -135,6 +136,13 @@ async function handleDocumentUpload(ctx) {
     return sendSafe(ctx.telegram, chatId, '⚠️ ดาวน์โหลดไฟล์ไม่สำเร็จ ลองส่งใหม่อีกครั้งครับ');
   }
 
+  // A big transaction log takes tens of seconds to read. That read runs on a
+  // worker thread, so this handler stays free to report how it is going —
+  // and to answer anyone else in the meantime.
+  const progress = startProgressReporter(ctx.telegram, chatId, {
+    label: filename.replace(/\.xlsx?$/i, ''),
+  });
+
   let result;
   try {
     result = await ingestUpload({
@@ -143,6 +151,7 @@ async function handleDocumentUpload(ctx) {
       fileSize: doc.file_size ?? buffer.length,
       chatId,
       captionText: ctx.message.caption ?? '',
+      onProgress: progress.onProgress,
     });
   } catch (err) {
     logger.error('ingest failed', {
@@ -155,6 +164,10 @@ async function handleDocumentUpload(ctx) {
       chatId,
       '⚠️ อ่านไฟล์ไม่สำเร็จ — ตรวจว่าเป็นไฟล์ Excel export จาก Power BI ที่ถูกต้องครับ',
     );
+  } finally {
+    // Runs on the error path too: a crashed worker must not leave a "⏳ กำลัง
+    // ประมวลผล" message sitting there for ever.
+    await progress.finish();
   }
 
   return respondToUploadResult(ctx, result);
@@ -228,7 +241,17 @@ async function handleQuestion(ctx, question) {
   ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
 
   try {
-    const dataContext = site ? await buildDataContext(site, question) : null;
+    // Parsing a not-yet-parsed upload happens on the first question that needs
+    // it, which can be the slow one — report it the same way an upload does.
+    const parseProgress = startProgressReporter(ctx.telegram, chatId);
+    let dataContext;
+    try {
+      dataContext = site
+        ? await buildDataContext(site, question, { onProgress: parseProgress.onProgress })
+        : null;
+    } finally {
+      await parseProgress.finish();
+    }
     const pastTurns = getTurns(chatId);
 
     const envelope = await askClaude({
