@@ -195,7 +195,14 @@ export async function ingestUpload({
   const fileType =
     detectFileType(headers) ??
     (isHourPivotHeader(headers) ? resolvePivotFileType(originalFilename) : null);
-  if (!fileType) return { status: 'unrecognized' };
+  if (!fileType) {
+    // The header row as actually read is the only thing that can explain a
+    // rejection — a signature that matches in a unit test says nothing about
+    // what this particular upload contained (a different export variant, a
+    // stray leading column, a file the running build predates).
+    logger.warn('unrecognized file upload', { originalFilename, headers });
+    return { status: 'unrecognized' };
+  }
 
   const type = getFileType(fileType);
   const site = normalizeSiteName(captionText) ?? normalizeSiteName(originalFilename);

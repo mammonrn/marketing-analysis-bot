@@ -8,7 +8,7 @@ import { askClaude } from '../claude/client.js';
 import { detectFraudIntent } from '../fraud/guard.js';
 import { detectSite, siteDisplayName, ALL_SITE_KEYS } from '../data/sites.js';
 import { buildDataContext, fileInventory } from '../data/query.js';
-import { getFileType } from '../data/fileTypes.js';
+import { getFileType, FILE_TYPES } from '../data/fileTypes.js';
 import {
   ingestUpload,
   resolvePendingSite,
@@ -66,8 +66,14 @@ function respondToUploadResult(ctx, result) {
       return sendSafe(
         ctx.telegram,
         chatId,
-        'ไม่รู้จักรูปแบบไฟล์นี้ครับ — ตรวจว่าเป็น Power BI export ที่มี column ตรงกับที่ระบบรู้จัก ' +
-          '(Daily Value / VIP / New Member Quality / Deposit Count Distribution / Brand Game Value)',
+        'ไม่รู้จักรูปแบบไฟล์นี้ครับ — ตรวจว่าเป็น Power BI export ที่มี column ตรงกับที่ระบบรู้จัก\n\n' +
+          `ประเภทไฟล์ที่รองรับตอนนี้ (${FILE_TYPES.length} ชนิด):\n` +
+          // Built from the manifest so it cannot drift out of date the way the
+          // hardcoded list of five did. One per line rather than slash-joined:
+          // several labels ("AD / Agent", "Brand / Game Value") contain a
+          // slash themselves, so a slash separator would read as more types
+          // than there are.
+          FILE_TYPES.map((type) => `• ${type.label}`).join('\n'),
       );
     case 'needs_site':
       return sendSafe(
