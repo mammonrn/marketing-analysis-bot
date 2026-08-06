@@ -31,7 +31,8 @@ import {
   resolvePivotFileType,
 } from './fileTypes.js';
 import { normalizeSiteName, siteDisplayName } from './sites.js';
-import { readSheet, readHeaderRow, normaliseDate, yearMonthOf } from './parse.js';
+import { readHeaderRow } from './parse.js';
+import { countYearMonths } from './parseRunner.js';
 import {
   findRawFile,
   upsertRawFile,
@@ -78,22 +79,22 @@ function previousYearMonth(date = new Date()) {
 }
 
 /**
- * `readRows` is a thunk, not an array, because reading them is the expensive
- * part: a six-month transaction log is ~150k rows and holding them costs
+ * `readCounts` is a thunk, not a tally, because producing it is the expensive
+ * part: a six-month transaction log is ~150k rows and reading them costs
  * hundreds of MB. A caption that names the month, or a snapshot type with no
  * date column at all, settles the question without ever opening the sheet.
+ *
+ * What comes back is only `{ 'YYYY-MM': rowCount }` — the counting happens
+ * wherever the rows already are (on the worker thread, for a big file), so
+ * the rows themselves never have to travel or be held here.
  */
-async function resolveYearMonth({ dateColumn, readRows, hintText }) {
+async function resolveYearMonth({ dateColumn, readCounts, hintText }) {
   const hint = extractYearMonthHint(hintText);
   if (hint) return hint;
 
   if (dateColumn) {
-    const counts = new Map();
-    for (const row of await readRows()) {
-      const ym = yearMonthOf(normaliseDate(row[dateColumn]));
-      if (ym) counts.set(ym, (counts.get(ym) ?? 0) + 1);
-    }
-    if (counts.size > 0) return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const counts = Object.entries((await readCounts()) ?? {});
+    if (counts.length > 0) return counts.sort((a, b) => b[1] - a[1])[0][0];
   }
 
   return previousYearMonth();
@@ -175,7 +176,14 @@ function finishOrConfirm({ site, yearMonth, fileType, buffer, originalFilename, 
  * `captionText` is whatever the user typed alongside the file (caption, or a
  * text message sent right before it) — used for both site and month hints.
  */
-export async function ingestUpload({ buffer, originalFilename, fileSize, chatId, captionText }) {
+export async function ingestUpload({
+  buffer,
+  originalFilename,
+  fileSize,
+  chatId,
+  captionText,
+  onProgress,
+}) {
   // Header row only: an unrecognised file is dropped here, before the cost of
   // materialising every row. A 150k-row file that matches no signature used to
   // be parsed in full first and pushed the process past pm2's memory limit.
@@ -193,9 +201,13 @@ export async function ingestUpload({ buffer, originalFilename, fileSize, chatId,
   const site = normalizeSiteName(captionText) ?? normalizeSiteName(originalFilename);
   // Aggregating types date the file from a raw column (`AddTime`) — their
   // `dateColumn` names a key that only exists after the daily summary is built.
+  const dateColumn = type.sourceDateColumn ?? type.dateColumn;
   const yearMonth = await resolveYearMonth({
-    dateColumn: type.sourceDateColumn ?? type.dateColumn,
-    readRows: async () => (await readSheet(buffer)).rows,
+    dateColumn,
+    // Goes through the runner so a large log is read off-thread instead of
+    // stalling every other chat, and comes back as a month tally rather than
+    // 150k rows nothing here would use.
+    readCounts: () => countYearMonths({ buffer, dateColumn, onProgress }),
     hintText: captionText,
   });
 
