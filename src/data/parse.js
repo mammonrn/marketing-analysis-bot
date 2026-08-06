@@ -83,6 +83,23 @@ export async function readSheet(source) {
   return { headers, rows };
 }
 
+/** Cheap read of just the header row — used to decide whether a file is
+ * even worth fully parsing, before paying the memory cost of reading every
+ * row. `sheetRows: 1` tells SheetJS to stop building cell objects after the
+ * first row instead of materialising the whole worksheet, which is what
+ * blew a 150k-row unrecognised file past pm2's memory limit. */
+export async function readHeaderRow(source) {
+  const buffer = Buffer.isBuffer(source) ? source : fs.readFileSync(source);
+  const workbook = XLSX.read(buffer, { type: 'buffer', sheetRows: 1 });
+
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) return [];
+  const sheet = workbook.Sheets[firstSheetName];
+
+  const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+  return (grid[0] ?? []).map((h) => String(h ?? '').trim());
+}
+
 /** `YYYY-MM-DD` for anything that looks like a date, otherwise null. */
 export function normaliseDate(value) {
   if (value === null || value === undefined || value === '') return null;
