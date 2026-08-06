@@ -26,6 +26,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import XLSX from 'xlsx';
 import { getFileType } from './fileTypes.js';
+import { normaliseDate, yearMonthOf } from './dates.js';
 import { findRawFile, getRawFile, markParsed, insertParsedRows } from './db.js';
 import { ROOT } from '../paths.js';
 import { logger } from '../logger.js';
@@ -100,36 +101,56 @@ export async function readHeaderRow(source) {
   return (grid[0] ?? []).map((h) => String(h ?? '').trim());
 }
 
-/** `YYYY-MM-DD` for anything that looks like a date, otherwise null. */
-export function normaliseDate(value) {
-  if (value === null || value === undefined || value === '') return null;
+// The export numbers its row axis 1-7 and says which end it starts at in its
+// own filename ("Week Day (Week begins on Monday) x Hour").
+const WEEKDAY_NAMES = [
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
+];
 
-  // Fallback for date cells that came through as a raw Excel serial number
-  // instead of a JS Date (see file header note) — decode with SheetJS's own
-  // date-serial math rather than guessing. Range chosen to safely bracket
-  // plausible spreadsheet dates (~1954-2119) without colliding with small
-  // numeric business values (durations, points, counts, etc.) that might
-  // end up in a mis-mapped date column.
-  // A number is either a serial in that band or not a date at all: falling
-  // through to `new Date(String(n))` would read a bare number as a year
-  // (100 -> "0100-01-01", 19999 -> "+019999-01"), so bail out instead.
-  if (typeof value === 'number') {
-    if (value <= 20000 || value >= 80000) return null;
-    const dc = XLSX.SSF.parse_date_code(value);
-    if (!dc) return null;
-    const d = new Date(Date.UTC(dc.y, dc.m - 1, dc.d));
-    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+/**
+ * Reshapes an hour cross-tab into ordinary rows: 7 weekday rows across 24
+ * hour columns become 168 `{weekday, hour, <valueKey>}` rows, so the pivot
+ * goes through the same storage path as every other file type.
+ *
+ * The sheet carries two rows of furniture that are not data and are skipped
+ * by the 1-7 check: a `Week Day | Average of Points | ...` sub-header sitting
+ * under the real header row, and an `Applied filters: ...` trailer at the
+ * bottom. The leading column is headed `Hour` even though it holds the
+ * weekday axis — that is how Power BI labels a pivot, not a mistake to fix.
+ */
+export async function parsePivotSheet(source, { valueKey = 'avg_bin' } = {}) {
+  const { headers, rows } = await readSheet(source);
+  if (headers.length === 0) return [];
+
+  const [axisColumn, ...hourColumns] = headers;
+
+  const out = [];
+  for (const row of rows) {
+    const dayNumber = Number(row[axisColumn]);
+    if (!Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > 7) continue;
+
+    for (const column of hourColumns) {
+      const hour = Number.parseInt(column, 10);
+      if (!Number.isInteger(hour)) continue;
+      out.push({
+        weekday: WEEKDAY_NAMES[dayNumber - 1],
+        weekday_num: dayNumber,
+        hour,
+        [valueKey]: row[column] ?? null,
+      });
+    }
   }
-
-  const s = String(value);
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  return out;
 }
 
-export function yearMonthOf(dateStr) {
-  return dateStr ? dateStr.slice(0, 7) : null;
-}
+// Imported (not just re-exported) because `ensureParsed` below calls it.
+export { normaliseDate, yearMonthOf };
 
 function requireRawFile({ site, yearMonth, fileType }) {
   const row = findRawFile({ site, yearMonth, fileType });
@@ -153,8 +174,19 @@ export async function ensureParsed({ site, yearMonth, fileType }) {
   if (rawFile.parsed) return rawFile;
 
   const type = getFileType(fileType);
-  const { rows } = await readSheet(path.join(ROOT, rawFile.path));
+  const absPath = path.join(ROOT, rawFile.path);
   const dateColumn = type?.dateColumn;
+
+  // Three shapes reach storage the same way: ordinary row-per-record sheets,
+  // cross-tabs reshaped into rows, and transaction logs collapsed to a daily
+  // summary. Only what produces `rows` differs.
+  let rows;
+  if (type?.pivot) {
+    rows = await parsePivotSheet(absPath, { valueKey: type.pivotValueKey });
+  } else {
+    ({ rows } = await readSheet(absPath));
+    if (type?.aggregate) rows = type.aggregate(rows);
+  }
 
   const parsedRows = rows.map((row) => ({
     row,
