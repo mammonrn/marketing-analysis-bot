@@ -23,10 +23,51 @@ import { logger } from '../logger.js';
 
 let db;
 
+const PENDING_TABLES = ['pending_uploads', 'pending_duplicates'];
+
+/**
+ * Both pending tables originally keyed on `chat_id` alone, which is the bug
+ * this migration exists to undo. `CREATE TABLE IF NOT EXISTS` would leave an
+ * existing database on the old shape for ever, so the old table is renamed
+ * out of the way first and its rows copied back afterwards — no waiting
+ * upload is dropped by the upgrade.
+ */
+function setAsideLegacyPendingTables(d) {
+  const moved = [];
+  for (const table of PENDING_TABLES) {
+    const columns = d.prepare(`PRAGMA table_info(${table})`).all();
+    // Empty for a table that does not exist yet — a fresh database migrates nothing.
+    if (columns.some((column) => column.name === 'chat_id' && column.pk === 1)) {
+      d.exec(`ALTER TABLE ${table} RENAME TO ${table}_legacy`);
+      moved.push(table);
+    }
+  }
+  return moved;
+}
+
+function restoreLegacyPendingRows(d, moved) {
+  for (const table of moved) {
+    // The legacy table has exactly the new columns minus the new surrogate id.
+    const columns = d
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .map((column) => column.name)
+      .filter((name) => name !== 'id')
+      .join(', ');
+
+    const { count } = d.prepare(`SELECT COUNT(*) AS count FROM ${table}_legacy`).get();
+    d.exec(`INSERT INTO ${table} (${columns}) SELECT ${columns} FROM ${table}_legacy`);
+    d.exec(`DROP TABLE ${table}_legacy`);
+    logger.info('migrated pending table to one row per file', { table, rows: count });
+  }
+}
+
 export function initDataDb(sqlitePath = config.session.sqlitePath) {
   fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
   db = new Database(sqlitePath);
   db.pragma('journal_mode = WAL');
+
+  const legacy = setAsideLegacyPendingTables(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS raw_files (
@@ -59,19 +100,30 @@ export function initDataDb(sqlitePath = config.session.sqlitePath) {
       ON parsed_rows(site, file_type, year_month);
 
     -- Waiting on the user to name a site for an upload we couldn't guess (spec §3B step 1).
+    --
+    -- One row per waiting file, NOT one per chat. chat_id used to be the
+    -- primary key, so a second upload arriving before the user answered
+    -- overwrote the first: eleven files sent at once left ten temp files on
+    -- disk with nothing in the database pointing at them.
     CREATE TABLE IF NOT EXISTS pending_uploads (
-      chat_id            TEXT PRIMARY KEY,
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id            TEXT NOT NULL,
       temp_path          TEXT NOT NULL,
       original_filename  TEXT NOT NULL,
       file_size          INTEGER NOT NULL,
       file_type          TEXT NOT NULL,
       year_month         TEXT NOT NULL,
-      created_at         INTEGER NOT NULL
+      created_at         INTEGER NOT NULL,
+      UNIQUE (chat_id, temp_path)
     );
+    CREATE INDEX IF NOT EXISTS idx_pending_uploads_chat ON pending_uploads(chat_id);
 
     -- Waiting on a yes/no to overwrite an exact duplicate (spec §3B duplicate rule).
+    -- Also one row per file, for the same reason: re-sending a whole month's
+    -- batch makes every file in it a duplicate at once.
     CREATE TABLE IF NOT EXISTS pending_duplicates (
-      chat_id            TEXT PRIMARY KEY,
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id            TEXT NOT NULL,
       raw_file_id        INTEGER NOT NULL,
       temp_path          TEXT NOT NULL,
       original_filename  TEXT NOT NULL,
@@ -79,9 +131,13 @@ export function initDataDb(sqlitePath = config.session.sqlitePath) {
       site               TEXT NOT NULL,
       year_month         TEXT NOT NULL,
       file_type          TEXT NOT NULL,
-      created_at         INTEGER NOT NULL
+      created_at         INTEGER NOT NULL,
+      UNIQUE (chat_id, temp_path)
     );
+    CREATE INDEX IF NOT EXISTS idx_pending_duplicates_chat ON pending_duplicates(chat_id);
   `);
+
+  restoreLegacyPendingRows(db, legacy);
 
   logger.info('data store ready', { path: sqlitePath });
   return db;
@@ -171,35 +227,45 @@ export function deleteRawFile(id) {
   requireDb().prepare('DELETE FROM raw_files WHERE id = ?').run(id);
 }
 
-export function setPendingUpload(chatId, data) {
+/** Adds one waiting file. Several may wait on the same chat at once. */
+export function addPendingUpload(chatId, data) {
   requireDb()
     .prepare(
       `INSERT INTO pending_uploads (chat_id, temp_path, original_filename, file_size, file_type, year_month, created_at)
        VALUES (@chatId, @tempPath, @originalFilename, @fileSize, @fileType, @yearMonth, @createdAt)
-       ON CONFLICT(chat_id) DO UPDATE SET
-         temp_path = excluded.temp_path, original_filename = excluded.original_filename,
+       ON CONFLICT(chat_id, temp_path) DO UPDATE SET
+         original_filename = excluded.original_filename,
          file_size = excluded.file_size, file_type = excluded.file_type,
          year_month = excluded.year_month, created_at = excluded.created_at`,
     )
     .run({ chatId: String(chatId), createdAt: now(), ...data });
 }
 
-export function getPendingUpload(chatId) {
-  return requireDb().prepare('SELECT * FROM pending_uploads WHERE chat_id = ?').get(String(chatId));
+/** Oldest first, so a batch is processed in the order it was sent. */
+export function listPendingUploads(chatId) {
+  return requireDb()
+    .prepare('SELECT * FROM pending_uploads WHERE chat_id = ? ORDER BY id')
+    .all(String(chatId));
 }
 
-export function clearPendingUpload(chatId) {
+export function countPendingUploads(chatId) {
+  return requireDb()
+    .prepare('SELECT COUNT(*) AS count FROM pending_uploads WHERE chat_id = ?')
+    .get(String(chatId)).count;
+}
+
+export function clearPendingUploads(chatId) {
   requireDb().prepare('DELETE FROM pending_uploads WHERE chat_id = ?').run(String(chatId));
 }
 
-export function setPendingDuplicate(chatId, data) {
+export function addPendingDuplicate(chatId, data) {
   requireDb()
     .prepare(
       `INSERT INTO pending_duplicates
          (chat_id, raw_file_id, temp_path, original_filename, file_size, site, year_month, file_type, created_at)
        VALUES (@chatId, @rawFileId, @tempPath, @originalFilename, @fileSize, @site, @yearMonth, @fileType, @createdAt)
-       ON CONFLICT(chat_id) DO UPDATE SET
-         raw_file_id = excluded.raw_file_id, temp_path = excluded.temp_path,
+       ON CONFLICT(chat_id, temp_path) DO UPDATE SET
+         raw_file_id = excluded.raw_file_id,
          original_filename = excluded.original_filename, file_size = excluded.file_size,
          site = excluded.site, year_month = excluded.year_month, file_type = excluded.file_type,
          created_at = excluded.created_at`,
@@ -207,11 +273,19 @@ export function setPendingDuplicate(chatId, data) {
     .run({ chatId: String(chatId), createdAt: now(), ...data });
 }
 
-export function getPendingDuplicate(chatId) {
-  return requireDb().prepare('SELECT * FROM pending_duplicates WHERE chat_id = ?').get(String(chatId));
+export function listPendingDuplicates(chatId) {
+  return requireDb()
+    .prepare('SELECT * FROM pending_duplicates WHERE chat_id = ? ORDER BY id')
+    .all(String(chatId));
 }
 
-export function clearPendingDuplicate(chatId) {
+export function countPendingDuplicates(chatId) {
+  return requireDb()
+    .prepare('SELECT COUNT(*) AS count FROM pending_duplicates WHERE chat_id = ?')
+    .get(String(chatId)).count;
+}
+
+export function clearPendingDuplicates(chatId) {
   requireDb().prepare('DELETE FROM pending_duplicates WHERE chat_id = ?').run(String(chatId));
 }
 

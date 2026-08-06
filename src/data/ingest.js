@@ -36,12 +36,14 @@ import { countYearMonths } from './parseRunner.js';
 import {
   findRawFile,
   upsertRawFile,
-  setPendingUpload,
-  getPendingUpload,
-  clearPendingUpload,
-  setPendingDuplicate,
-  getPendingDuplicate,
-  clearPendingDuplicate,
+  addPendingUpload,
+  listPendingUploads,
+  countPendingUploads,
+  clearPendingUploads,
+  addPendingDuplicate,
+  listPendingDuplicates,
+  countPendingDuplicates,
+  clearPendingDuplicates,
 } from './db.js';
 
 const THAI_MONTHS = {
@@ -155,7 +157,7 @@ function finishOrConfirm({ site, yearMonth, fileType, buffer, originalFilename, 
 
   if (isExactDuplicate) {
     const tempPath = writeTemp(chatId, buffer);
-    setPendingDuplicate(chatId, {
+    addPendingDuplicate(chatId, {
       rawFileId: existing.id,
       tempPath,
       originalFilename,
@@ -220,66 +222,114 @@ export async function ingestUpload({
 
   if (!site) {
     const tempPath = writeTemp(chatId, buffer);
-    setPendingUpload(chatId, { tempPath, originalFilename, fileSize, fileType, yearMonth });
+    addPendingUpload(chatId, { tempPath, originalFilename, fileSize, fileType, yearMonth });
     return { status: 'needs_site', fileType, yearMonth };
   }
 
   return finishOrConfirm({ site, yearMonth, fileType, buffer, originalFilename, fileSize, chatId });
 }
 
-/** The next text message after a `needs_site` reply is expected to name the site. */
+/**
+ * The next text message after a `needs_site` reply is expected to name the
+ * site — and it answers for **every** file still waiting on that chat, not
+ * just the most recent one.
+ *
+ * That is what someone who sends eleven files and then types "SH666 ทั้งหมด"
+ * plainly means, and answering for only one of them is how ten uploads went
+ * missing before this.
+ */
 export function resolvePendingSite(chatId, siteInput) {
-  const pending = getPendingUpload(chatId);
-  if (!pending) return { status: 'no_pending' };
+  const pending = listPendingUploads(chatId);
+  if (pending.length === 0) return { status: 'no_pending' };
 
   const site = normalizeSiteName(siteInput);
+  // Leave the queue untouched on an unusable answer: the user gets to try again.
   if (!site) return { status: 'invalid_site' };
 
-  const buffer = fs.readFileSync(pending.temp_path);
-  clearPendingUpload(chatId);
-  fs.rmSync(pending.temp_path, { force: true });
+  clearPendingUploads(chatId);
 
-  return finishOrConfirm({
-    site,
-    yearMonth: pending.year_month,
-    fileType: pending.file_type,
-    buffer,
-    originalFilename: pending.original_filename,
-    fileSize: pending.file_size,
-    chatId,
-  });
+  const results = [];
+  for (const item of pending) {
+    let buffer;
+    try {
+      buffer = fs.readFileSync(item.temp_path);
+    } catch (err) {
+      // A temp file that vanished (manual cleanup, a restart mid-flight)
+      // must not abort the rest of the batch.
+      logger.warn('pending upload temp file missing on resolve', {
+        chatId,
+        tempPath: item.temp_path,
+        message: err?.message,
+      });
+      results.push({
+        status: 'missing_temp',
+        fileType: item.file_type,
+        originalFilename: item.original_filename,
+      });
+      continue;
+    }
+    fs.rmSync(item.temp_path, { force: true });
+
+    results.push(
+      finishOrConfirm({
+        site,
+        yearMonth: item.year_month,
+        fileType: item.file_type,
+        buffer,
+        originalFilename: item.original_filename,
+        fileSize: item.file_size,
+        chatId,
+      }),
+    );
+  }
+
+  logger.info('resolved pending uploads', { chatId, site, files: results.length });
+  return { status: 'resolved', site, results };
 }
 
 export function hasPendingUpload(chatId) {
-  return Boolean(getPendingUpload(chatId));
+  return countPendingUploads(chatId) > 0;
 }
 
 export function hasPendingDuplicate(chatId) {
-  return Boolean(getPendingDuplicate(chatId));
+  return countPendingDuplicates(chatId) > 0;
 }
 
 /** Answer to the "ต้องการอัปเดตทับไหม" confirm (spec §3B duplicate rule). */
 export function resolvePendingDuplicate(chatId, overwrite) {
-  const pending = getPendingDuplicate(chatId);
-  if (!pending) return { status: 'no_pending' };
+  const pending = listPendingDuplicates(chatId);
+  if (pending.length === 0) return { status: 'no_pending' };
 
-  clearPendingDuplicate(chatId);
+  clearPendingDuplicates(chatId);
 
-  if (!overwrite) {
-    fs.rmSync(pending.temp_path, { force: true });
-    return { status: 'kept_existing' };
-  }
+  // One yes/no answers for the whole batch, the same way one site name does.
+  // Re-sending a month's files makes every one of them a duplicate at once,
+  // so asking per file would mean eleven button presses.
+  const results = pending.map((item) => {
+    if (!overwrite) {
+      fs.rmSync(item.temp_path, { force: true });
+      return { status: 'kept_existing', fileType: item.file_type, site: item.site };
+    }
 
-  const buffer = fs.readFileSync(pending.temp_path);
-  fs.rmSync(pending.temp_path, { force: true });
+    const buffer = fs.readFileSync(item.temp_path);
+    fs.rmSync(item.temp_path, { force: true });
 
-  const row = writeFinal({
-    site: pending.site,
-    yearMonth: pending.year_month,
-    fileType: pending.file_type,
-    buffer,
-    originalFilename: pending.original_filename,
-    fileSize: pending.file_size,
+    const row = writeFinal({
+      site: item.site,
+      yearMonth: item.year_month,
+      fileType: item.file_type,
+      buffer,
+      originalFilename: item.original_filename,
+      fileSize: item.file_size,
+    });
+    return {
+      status: 'saved',
+      site: item.site,
+      yearMonth: item.year_month,
+      fileType: item.file_type,
+      row,
+    };
   });
-  return { status: 'saved', site: pending.site, yearMonth: pending.year_month, fileType: pending.file_type, row };
+
+  return { status: 'resolved', results };
 }
