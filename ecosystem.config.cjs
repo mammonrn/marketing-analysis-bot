@@ -28,9 +28,13 @@ module.exports = {
       // peak RSS 955-998MB for the whole process, worker thread included.
       // That is already at 1G, and it was measured in a bare harness with no
       // system prompt, session store or Telegram client resident, so the live
-      // bot sits higher. 1.5G leaves roughly a third in hand and still fits
+      // bot sits higher. 1536M leaves roughly a third in hand and still fits
       // both bots inside what is free.
-      max_memory_restart: '1.5G',
+      //
+      // Written in MB on purpose: PM2 validates this against an integer regex
+      // (`[NUMBER]G` / `[NUMBER]M` / bytes), so '1.5G' is rejected with a
+      // warning and the limit then does not apply at all.
+      max_memory_restart: '1536M',
 
       env: {
         NODE_ENV: 'production',
