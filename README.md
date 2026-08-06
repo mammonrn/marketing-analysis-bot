@@ -153,7 +153,7 @@ spec §9 ตั้งคำถามสถาปัตยกรรมไว้ 5
 
 | หัวข้อ | ที่เลือก | เหตุผล |
 |---|---|---|
-| ไลบรารีอ่าน `.xlsx` | `exceljs` | `xlsx`/SheetJS หยุด publish เวอร์ชันใหม่ขึ้น npm ตามปกติแล้ว (ต้องดึงจาก CDN ของเขาเอง) — `exceljs` ยัง publish บน npm ปกติ, MIT license |
+| ไลบรารีอ่าน `.xlsx` | `xlsx` (SheetJS) | เดิมเลือก `exceljs` เพราะยัง publish บน npm ปกติ แต่เปลี่ยนแล้ว (2026-08): ไฟล์ export บางแบบเขียน `xl/workbook.xml` โดยใส่ namespace prefix (`<x:workbook>` แทน `<workbook>`) ซึ่งถูกต้องตาม OOXML spec แต่ exceljs มองหา tag แบบไม่มี prefix เลยหา `<sheets>` ไม่เจอ แล้ว throw `Cannot read properties of undefined (reading 'sheets')` — SheetJS ทนกับรูปแบบนี้ได้ ติดตั้งจาก CDN ของ SheetJS โดยตรง (`https://cdn.sheetjs.com/...`) ไม่ใช่ npm registry เพราะเวอร์ชันบน registry ค้างที่ 0.18.5 และมีช่องโหว่ high severity ที่ไม่มีแพตช์ |
 | schema ตาราง parsed | ตารางเดียว `parsed_rows` (คอลัมน์ `site`/`file_type`/`year_month`/`row_date`/`row_json`) แทนตารางแยกต่อ file type | คอลัมน์จริงในไฟล์มี 15–30 คอลัมน์ต่อ file type และเปลี่ยนได้ตามที่ Power BI export เพิ่ม — เก็บเป็น JSON ตามชื่อคอลัมน์เดิม แล้วให้ `transform.js` (`normaliseRow`/`deriveMetrics`) แปลงหน่วยตอน query ใช้ shape เดียวกับที่เทสอยู่แล้ว ไม่ต้อง hard-code SQL column ต่อ file type |
 | เดือนของข้อมูล (`year_month`) เมื่อไฟล์ไม่มี column วันที่ (VIP, Brand/Game Value) | หาจากข้อความ/แคปชันที่แนบมาก่อน (`2026-06`, `มิถุนายน`) ไม่งั้น fallback เป็นเดือนก่อนหน้าเดือนอัปโหลด | spec ไม่ได้ระบุไว้ตรง ๆ — ตัวอย่าง path ในสเปคเอง (`.../2026/06/..._20260701...`) บ่งบอกว่าอัปโหลดวันที่ 1 ก.ค. แต่เก็บเป็นข้อมูลเดือน มิ.ย. ตรงกับ pattern "อัปโหลดข้อมูลที่เพิ่งจบเดือน" |
 

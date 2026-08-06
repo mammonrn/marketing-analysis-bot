@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import ExcelJS from 'exceljs';
+import * as XLSX from 'xlsx';
 
 // config.js resolves DATA_DIR at import time, so the env has to be set before
 // anything in the module graph is evaluated — same reasoning as session.test.js.
@@ -15,12 +15,14 @@ let db;
 let ingest;
 let ROOT;
 
-async function workbookBuffer(headers, rows) {
-  const wb = new ExcelJS.Workbook();
-  const sheet = wb.addWorksheet('Sheet1');
-  sheet.addRow(headers);
-  for (const row of rows) sheet.addRow(headers.map((h) => row[h] ?? null));
-  return wb.xlsx.writeBuffer();
+function workbookBuffer(headers, rows) {
+  const wb = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([
+    headers,
+    ...rows.map((row) => headers.map((h) => row[h] ?? null)),
+  ]);
+  XLSX.utils.book_append_sheet(wb, sheet, 'Sheet1');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 
 const DAILY_HEADERS = ['Date', 'RTP', 'BIn', 'DAU', 'R'];
@@ -45,7 +47,7 @@ after(() => {
 });
 
 test('an unrecognised header set is rejected without touching storage', async () => {
-  const buffer = await workbookBuffer(['Foo', 'Bar'], [{ Foo: 1, Bar: 2 }]);
+  const buffer = workbookBuffer(['Foo', 'Bar'], [{ Foo: 1, Bar: 2 }]);
   const result = await ingest.ingestUpload({
     buffer,
     originalFilename: 'mystery.xlsx',
@@ -57,7 +59,7 @@ test('an unrecognised header set is rejected without touching storage', async ()
 });
 
 test('a file with no site clue asks, then resolves on the next reply — folder matches spec §3B', async () => {
-  const buffer = await workbookBuffer(DAILY_HEADERS, dailyRows());
+  const buffer = workbookBuffer(DAILY_HEADERS, dailyRows());
   const asked = await ingest.ingestUpload({
     buffer,
     originalFilename: 'daily.xlsx',
@@ -80,7 +82,7 @@ test('a file with no site clue asks, then resolves on the next reply — folder 
 });
 
 test('site named in the caption is used directly', async () => {
-  const buffer = await workbookBuffer(DAILY_HEADERS, dailyRows());
+  const buffer = workbookBuffer(DAILY_HEADERS, dailyRows());
   const result = await ingest.ingestUpload({
     buffer,
     originalFilename: 'daily-u89.xlsx',
@@ -94,7 +96,7 @@ test('site named in the caption is used directly', async () => {
 });
 
 test('re-uploading the identical file asks to confirm before overwriting', async () => {
-  const buffer = await workbookBuffer(DAILY_HEADERS, dailyRows());
+  const buffer = workbookBuffer(DAILY_HEADERS, dailyRows());
   const first = await ingest.ingestUpload({
     buffer,
     originalFilename: 'daily-88f.xlsx',
@@ -118,7 +120,7 @@ test('re-uploading the identical file asks to confirm before overwriting', async
 });
 
 test('declining the duplicate confirm keeps the existing file untouched', async () => {
-  const buffer = await workbookBuffer(DAILY_HEADERS, dailyRows());
+  const buffer = workbookBuffer(DAILY_HEADERS, dailyRows());
   const first = await ingest.ingestUpload({
     buffer,
     originalFilename: 'keep.xlsx',
@@ -141,7 +143,7 @@ test('declining the duplicate confirm keeps the existing file untouched', async 
 });
 
 test('re-uploading with a different filename/size updates silently — no confirm needed', async () => {
-  const bufferA = await workbookBuffer(DAILY_HEADERS, dailyRows());
+  const bufferA = workbookBuffer(DAILY_HEADERS, dailyRows());
   await ingest.ingestUpload({
     buffer: bufferA,
     originalFilename: 'v1.xlsx',
@@ -150,7 +152,7 @@ test('re-uploading with a different filename/size updates silently — no confir
     captionText: 'SH666',
   });
 
-  const bufferB = await workbookBuffer(DAILY_HEADERS, [
+  const bufferB = workbookBuffer(DAILY_HEADERS, [
     ...dailyRows(),
     { Date: '2026-06-03', RTP: 0.94, BIn: 420000, DAU: 460, R: 89000 },
   ]);
