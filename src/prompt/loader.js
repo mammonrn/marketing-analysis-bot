@@ -36,6 +36,15 @@ export const SKILL_MANIFEST = [
   { file: 'references/deposit-count-distribution.md', required: false, label: 'การกระจายจำนวนครั้งฝาก' },
   { file: 'references/brand-game-value.md', required: false, label: 'มูลค่าตามประเภทเกม' },
   { file: 'references/vip-members.md', required: false, label: 'VIP' },
+  // Authored in this repo rather than synced from the claude.ai project — they
+  // document file types the bot learned to read here first. Mirror them into
+  // the project when convenient so `sync:skill` stops reporting them missing.
+  { file: 'references/ad-agent.md', required: false, label: 'AD / Agent' },
+  { file: 'references/referrer.md', required: false, label: 'Referrer' },
+  { file: 'references/member-detail.md', required: false, label: 'Member Detail' },
+  { file: 'references/deposit-detail.md', required: false, label: 'Deposit Detail (สรุปรายวัน)' },
+  { file: 'references/bonus-log.md', required: false, label: 'Bonus / Points Log (สรุปรายวัน)' },
+  { file: 'references/avg-bin-by-hour.md', required: false, label: 'Average BIn ตามวัน × ชั่วโมง' },
   { file: 'references/fraud-anomaly-detection.md', required: true, label: 'fraud / anomaly (บังคับ)' },
 ];
 

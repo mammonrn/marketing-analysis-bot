@@ -24,7 +24,12 @@ import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { ROOT } from '../paths.js';
 import { logger } from '../logger.js';
-import { detectFileType, getFileType } from './fileTypes.js';
+import {
+  detectFileType,
+  getFileType,
+  isHourPivotHeader,
+  resolvePivotFileType,
+} from './fileTypes.js';
 import { normalizeSiteName, siteDisplayName } from './sites.js';
 import { readSheet, readHeaderRow, normaliseDate, yearMonthOf } from './parse.js';
 import {
@@ -72,13 +77,19 @@ function previousYearMonth(date = new Date()) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-function resolveYearMonth({ dateColumn, rows, hintText }) {
+/**
+ * `readRows` is a thunk, not an array, because reading them is the expensive
+ * part: a six-month transaction log is ~150k rows and holding them costs
+ * hundreds of MB. A caption that names the month, or a snapshot type with no
+ * date column at all, settles the question without ever opening the sheet.
+ */
+async function resolveYearMonth({ dateColumn, readRows, hintText }) {
   const hint = extractYearMonthHint(hintText);
   if (hint) return hint;
 
   if (dateColumn) {
     const counts = new Map();
-    for (const row of rows) {
+    for (const row of await readRows()) {
       const ym = yearMonthOf(normaliseDate(row[dateColumn]));
       if (ym) counts.set(ym, (counts.get(ym) ?? 0) + 1);
     }
@@ -169,14 +180,24 @@ export async function ingestUpload({ buffer, originalFilename, fileSize, chatId,
   // materialising every row. A 150k-row file that matches no signature used to
   // be parsed in full first and pushed the process past pm2's memory limit.
   const headers = await readHeaderRow(buffer);
-  const fileType = detectFileType(headers);
+  // Signature first, exactly as before. Only when that finds nothing do we ask
+  // whether this is one of the two hour pivots, which share a byte-identical
+  // header row and can only be told apart by filename — so every other file
+  // type's detection is untouched by this fallback.
+  const fileType =
+    detectFileType(headers) ??
+    (isHourPivotHeader(headers) ? resolvePivotFileType(originalFilename) : null);
   if (!fileType) return { status: 'unrecognized' };
-
-  const { rows } = await readSheet(buffer);
 
   const type = getFileType(fileType);
   const site = normalizeSiteName(captionText) ?? normalizeSiteName(originalFilename);
-  const yearMonth = resolveYearMonth({ dateColumn: type.dateColumn, rows, hintText: captionText });
+  // Aggregating types date the file from a raw column (`AddTime`) — their
+  // `dateColumn` names a key that only exists after the daily summary is built.
+  const yearMonth = await resolveYearMonth({
+    dateColumn: type.sourceDateColumn ?? type.dateColumn,
+    readRows: async () => (await readSheet(buffer)).rows,
+    hintText: captionText,
+  });
 
   if (!site) {
     const tempPath = writeTemp(chatId, buffer);

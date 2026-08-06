@@ -27,8 +27,34 @@ FILES=(
   "references/deposit-count-distribution.md"
   "references/brand-game-value.md"
   "references/vip-members.md"
+  "references/ad-agent.md"
+  "references/referrer.md"
+  "references/member-detail.md"
+  "references/deposit-detail.md"
+  "references/bonus-log.md"
+  "references/avg-bin-by-hour.md"
   "references/fraud-anomaly-detection.md"
 )
+
+# Files written in this repo rather than copied from the claude.ai project.
+# They are listed above so MANIFEST.json still records their hashes, but a
+# sync must not report them as missing — and must never delete them.
+REPO_AUTHORED=(
+  "references/ad-agent.md"
+  "references/referrer.md"
+  "references/member-detail.md"
+  "references/deposit-detail.md"
+  "references/bonus-log.md"
+  "references/avg-bin-by-hour.md"
+)
+
+is_repo_authored() {
+  local needle="$1"
+  for item in "${REPO_AUTHORED[@]}"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
 
 if [[ ! -d "$SRC" ]]; then
   echo "❌ ไม่พบ source dir: $SRC" >&2
@@ -47,8 +73,12 @@ for rel in "${FILES[@]}"; do
   dest_file="$DEST/$rel"
 
   if [[ ! -f "$src_file" ]]; then
-    printf '  ⚠️  ไม่มีใน source: %s\n' "$rel"
-    missing=$((missing + 1))
+    if is_repo_authored "$rel"; then
+      printf '  📝  เขียนใน repo นี้ (ไม่ sync): %s\n' "$rel"
+    else
+      printf '  ⚠️  ไม่มีใน source: %s\n' "$rel"
+      missing=$((missing + 1))
+    fi
     continue
   fi
 
