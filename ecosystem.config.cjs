@@ -22,8 +22,12 @@ module.exports = {
       min_uptime: '30s',
       restart_delay: 4000,
 
-      // The VPS has 4GB shared with Project 1; recycle before we crowd it out.
-      max_memory_restart: '400M',
+      // The VPS has 3.8GB, ~2.5GB of it free, shared with telegram-ads-bot.
+      // 400M was low enough that one large upload tripped a restart mid-work;
+      // reading a 120k-row workbook peaks around 300MB even after the
+      // header-only file-type check, so 1G leaves margin for bigger files
+      // while still fitting both bots in what is free.
+      max_memory_restart: '1G',
 
       env: {
         NODE_ENV: 'production',

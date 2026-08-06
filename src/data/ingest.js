@@ -26,7 +26,7 @@ import { ROOT } from '../paths.js';
 import { logger } from '../logger.js';
 import { detectFileType, getFileType } from './fileTypes.js';
 import { normalizeSiteName, siteDisplayName } from './sites.js';
-import { readSheet, normaliseDate, yearMonthOf } from './parse.js';
+import { readSheet, readHeaderRow, normaliseDate, yearMonthOf } from './parse.js';
 import {
   findRawFile,
   upsertRawFile,
@@ -165,9 +165,14 @@ function finishOrConfirm({ site, yearMonth, fileType, buffer, originalFilename, 
  * text message sent right before it) — used for both site and month hints.
  */
 export async function ingestUpload({ buffer, originalFilename, fileSize, chatId, captionText }) {
-  const { headers, rows } = await readSheet(buffer);
+  // Header row only: an unrecognised file is dropped here, before the cost of
+  // materialising every row. A 150k-row file that matches no signature used to
+  // be parsed in full first and pushed the process past pm2's memory limit.
+  const headers = await readHeaderRow(buffer);
   const fileType = detectFileType(headers);
   if (!fileType) return { status: 'unrecognized' };
+
+  const { rows } = await readSheet(buffer);
 
   const type = getFileType(fileType);
   const site = normalizeSiteName(captionText) ?? normalizeSiteName(originalFilename);
