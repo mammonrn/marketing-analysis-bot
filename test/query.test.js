@@ -33,6 +33,30 @@ test('pickFileType routes game/brand questions to brand_game_value', () => {
   assert.equal(pickFileType('ยิงปลา ยอดเท่าไหร่'), 'brand_game_value');
 });
 
+test('pickFileType routes English and mixed-language new-member questions', () => {
+  // The exact question from the reported failure: the file was ingested and
+  // stored correctly under shwe666/2026-07/new_member_quality, but this
+  // routed to daily_value, so the model was handed the wrong report and
+  // truthfully said the New Member Quality file had not been uploaded.
+  assert.equal(pickFileType('คุณภาพ new member เดือน 7 เป็นยังไง'), 'new_member_quality');
+  assert.equal(pickFileType('new member quality เดือนนี้'), 'new_member_quality');
+  assert.equal(pickFileType('new mems เพิ่มขึ้นไหม'), 'new_member_quality');
+  assert.equal(pickFileType('member ใหม่เดือนนี้เป็นไง'), 'new_member_quality');
+  assert.equal(pickFileType('คุณภาพสมาชิกเดือน 7'), 'new_member_quality');
+  assert.equal(pickFileType('คนใหม่ที่สมัครมาคุณภาพดีไหม'), 'new_member_quality');
+});
+
+test('pickFileType routes English game names to brand_game_value', () => {
+  assert.equal(pickFileType('slot vs fish อันไหนดีกว่า'), 'brand_game_value');
+  assert.equal(pickFileType('game type ไหนกำไรสูงสุด'), 'brand_game_value');
+  assert.equal(pickFileType('เกมไหนทำเงินดีที่สุด'), 'brand_game_value');
+});
+
+test('pickFileType routes English deposit-frequency questions', () => {
+  assert.equal(pickFileType('deposit frequency เดือนนี้'), 'deposit_count_distribution');
+  assert.equal(pickFileType('ลูกค้าฝากกี่ครั้งต่อเดือน'), 'deposit_count_distribution');
+});
+
 test('pickFileType defaults to daily_value for general questions', () => {
   assert.equal(pickFileType('RTP เท่าไหร่'), 'daily_value');
   assert.equal(pickFileType('revenue วันนี้'), 'daily_value');

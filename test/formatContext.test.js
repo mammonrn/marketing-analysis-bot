@@ -273,6 +273,36 @@ test('in the stats block the converted column leads its raw twin, both labelled'
   assert.ok(dau && !dau.includes('หน่วย:'), 'DAU is people, not money');
 });
 
+test('the percentage column leads its decimal twin, both labelled', () => {
+  // Same treatment as _THB, for the same reason: two columns whose names
+  // differ by a suffix and whose values differ by 100x, with nothing on the
+  // line saying which one is the percentage.
+  const rows = Array.from({ length: 45 }, (_, i) =>
+    dbRow({ Username: `u${i}`, 'Verify%': 0.75 + i / 1000, DAU: 470 }),
+  );
+
+  const text = context(rows, { site: 'shwe666' });
+  const lines = text.split('\n').filter((l) => l.startsWith('- '));
+
+  const pctAt = lines.findIndex((l) => l.startsWith('- Verify%_pct:'));
+  const rawAt = lines.findIndex((l) => l.startsWith('- Verify%:'));
+  assert.ok(pctAt >= 0 && rawAt >= 0, 'both columns must be summarised');
+  assert.ok(pctAt < rawAt, 'the percentage figure must be the one read first');
+
+  assert.match(lines[pctAt], /หน่วย: เปอร์เซ็นต์ \(%\)$/);
+  assert.match(lines[rawAt], /หน่วย: ค่าดิบตามไฟล์ เป็นทศนิยม ยังไม่ใช่ %$/);
+});
+
+test('the header explains _pct the same way it explains _THB', () => {
+  const text = context([dbRow({ 'Verify%': 0.755187 })], { site: 'shwe666' });
+
+  assert.match(text, /ให้อ้างอิงคอลัมน์ `_pct` เสมอ/);
+  assert.match(text, /ห้ามนำไปคูณ 100 ซ้ำอีก/);
+  // The converted value is present in the row, which is what makes the
+  // instruction actionable rather than advice about a column that isn't there.
+  assert.ok(text.includes('"Verify%_pct":75.5187'));
+});
+
 // --- the 40-row boundary ----------------------------------------------------
 
 test('40 rows keeps the original verbatim format exactly', () => {
