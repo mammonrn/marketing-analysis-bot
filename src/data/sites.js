@@ -103,11 +103,6 @@ function withOverride(site) {
   return fxOverrides.get(site.canonical) ?? site;
 }
 
-/** What config says, ignoring any override — for showing where a value came from. */
-export function getConfiguredSite(canonical) {
-  return SITES[canonical] ?? null;
-}
-
 export const ALL_SITE_KEYS = Object.keys(SITES);
 
 // Every alias, longest first, so a longer match (e.g. "88fed") is tried before
