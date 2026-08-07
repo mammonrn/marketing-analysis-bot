@@ -103,8 +103,38 @@ function isSummaryLabel(value) {
  * the label test catches `Total` / `Applied filters:` wherever a sheet has no
  * date column at all, and the date test catches a total row whose label cell
  * is simply blank. A row is furniture if either says so.
+ *
+ * `leadColumnIsUserText` restricts *where* the label test may fire, and exists
+ * because the unrestricted version quietly ate real data. On a time series the
+ * leading column is a Date axis, and on `brand_game_value` it is a fixed
+ * vocabulary (SLOT, FISH, ...) — nothing a person chose, so a leading "Total"
+ * can only be Power BI's own row. On the snapshot exports that column is a
+ * username or a channel name someone typed, and `vip.xlsx` duly contains
+ * members called `total`, `sum` and `รวม` — the label list has ten entries and
+ * matches a leading `label `/`label:` too, so `sum 99` went as well. They were
+ * deleted at the read, so `parsed_rows` was short and every count, sum and
+ * ranking downstream was computed from what was left.
+ *
+ * The fix keys on position, because that is what actually separates the two.
+ * Power BI writes its furniture as a block at the bottom of the grid, under
+ * the last real row; a member called "total" sits wherever the export's sort
+ * put them, which is in the body. So on these files the label test only
+ * applies to the trailing run of furniture-looking rows, and a labelled row
+ * with data above it is a member.
  */
-export function dropNonDataRows(rows, { headers = [], dateColumn = null } = {}) {
+function trailingFurnitureCount(rows, labelColumn) {
+  let count = 0;
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (!isSummaryLabel(rows[i][labelColumn])) break;
+    count += 1;
+  }
+  return count;
+}
+
+export function dropNonDataRows(
+  rows,
+  { headers = [], dateColumn = null, leadColumnIsUserText = false } = {},
+) {
   // The label test looks only at the leading column — that is where Power BI
   // puts the word — because scanning every cell would eventually discard a
   // real row over an unrelated cell that happens to read "Total".
@@ -116,8 +146,17 @@ export function dropNonDataRows(rows, { headers = [], dateColumn = null } = {}) 
 
   if (!labelColumn && !dateKey) return rows;
 
-  return rows.filter((row) => {
-    if (labelColumn && isSummaryLabel(row[labelColumn])) return false;
+  // Index of the first row in the trailing furniture block, or rows.length
+  // when there is none. Only consulted for user-text lead columns.
+  const trailingFrom =
+    labelColumn && leadColumnIsUserText
+      ? rows.length - trailingFurnitureCount(rows, labelColumn)
+      : 0;
+
+  return rows.filter((row, index) => {
+    if (labelColumn && isSummaryLabel(row[labelColumn])) {
+      if (!leadColumnIsUserText || index >= trailingFrom) return false;
+    }
     if (dateKey && normaliseDate(row[dateKey]) === null) return false;
     return true;
   });
@@ -270,7 +309,11 @@ export async function readAndShapeRows({
   // (`AddTime`) because their `dateColumn` names a key on the summary row that
   // does not exist yet.
   const rawDateColumn = dateColumn ?? type?.sourceDateColumn ?? type?.dateColumn ?? null;
-  const rows = dropNonDataRows(sheetRows, { headers, dateColumn: rawDateColumn });
+  const rows = dropNonDataRows(sheetRows, {
+    headers,
+    dateColumn: rawDateColumn,
+    leadColumnIsUserText: type?.leadColumnIsUserText ?? false,
+  });
 
   if (rows.length !== sheetRows.length) {
     // Logged rather than reported as progress: it is the one line that
