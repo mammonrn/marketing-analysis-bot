@@ -208,13 +208,13 @@ test('with every numeric column filtered out, the sample says it is unordered', 
   assert.deepEqual(names.slice(0, 3), ['u0', 'u1', 'u2'], 'falls back to original order');
 });
 
-// --- the 30-row boundary ----------------------------------------------------
+// --- the 40-row boundary ----------------------------------------------------
 
-test('30 rows keeps the original verbatim format exactly', () => {
-  const rows = Array.from({ length: 30 }, (_, i) => dbRow({ Username: `u${i}`, BIn: i }));
+test('40 rows keeps the original verbatim format exactly', () => {
+  const rows = Array.from({ length: 40 }, (_, i) => dbRow({ Username: `u${i}`, BIn: i }));
   const text = context(rows);
 
-  assert.match(text, /จำนวนแถว: 30/);
+  assert.match(text, /จำนวนแถว: 40/);
   assert.ok(!text.includes('====='), 'no summary blocks below the threshold');
   assert.ok(!text.includes('ตัวอย่าง'), 'nothing may be described as a sample');
   // Every row is present, in order, in the original `[meta] {json}` shape —
@@ -228,14 +228,37 @@ test('30 rows keeps the original verbatim format exactly', () => {
   assert.deepEqual(lines, expected);
 });
 
-test('31 rows switches to the summarised format', () => {
-  const rows = Array.from({ length: 31 }, (_, i) => dbRow({ Username: `u${i}`, BIn: i }));
+test('41 rows switches to the summarised format', () => {
+  const rows = Array.from({ length: 41 }, (_, i) => dbRow({ Username: `u${i}`, BIn: i }));
   const text = context(rows);
 
-  assert.match(text, /จำนวนแถวทั้งหมด: 31/);
-  assert.match(text, /คำนวณจากข้อมูลจริงครบทั้ง 31 แถว/);
-  assert.match(text, /ตัวอย่างข้อมูลรายแถว 15 แถว จากทั้งหมด 31 แถว/);
+  assert.match(text, /จำนวนแถวทั้งหมด: 41/);
+  assert.match(text, /คำนวณจากข้อมูลจริงครบทั้ง 41 แถว/);
+  assert.match(text, /ตัวอย่างข้อมูลรายแถว 15 แถว จากทั้งหมด 41 แถว/);
   assert.equal(text.split('\n').filter((l) => l.startsWith('[')).length, 15);
+});
+
+test('a full 31-day month of daily_value stays verbatim, every day addressable', () => {
+  // The case that moved the limit: a monthly daily_value export sat at 31-33
+  // rows, just over the old 30, so ranking questions ("ยอดสูงสุดวันไหน") lost
+  // the per-day rows they can only be answered from.
+  const rows = Array.from({ length: 31 }, (_, i) => {
+    const date = `2026-07-${String(i + 1).padStart(2, '0')}`;
+    return dbRow({ Date: date, BIn: 1000 + i, DAU: 400 + i }, { rowDate: date });
+  });
+
+  const text = context(rows, { fileType: 'daily_value' });
+
+  assert.match(text, /จำนวนแถว: 31/);
+  assert.ok(!text.includes('====='), 'a whole month must not be summarised away');
+  assert.equal(text.split('\n').filter((l) => l.startsWith('[')).length, 31);
+  // Every single day is present and quotable, not just the sampled 15.
+  for (let i = 1; i <= 31; i += 1) {
+    assert.ok(
+      text.includes(`2026-07-${String(i).padStart(2, '0')}`),
+      `day ${i} must be in the context`,
+    );
+  }
 });
 
 // --- the case that started this ---------------------------------------------
