@@ -30,6 +30,7 @@ import {
   detectFileType,
   getFileType,
   isHourPivotHeader,
+  refineFileTypeByFilename,
   resolvePivotFileType,
 } from './fileTypes.js';
 import { normalizeSiteName, siteDisplayName } from './sites.js';
@@ -226,7 +227,9 @@ export async function ingestUpload({
   // header row and can only be told apart by filename — so every other file
   // type's detection is untouched by this fallback.
   const fileType =
-    detectFileType(headers) ??
+    // A signature match can still be the wrong report when two exports share a
+    // header shape — the filename settles those before anything is stored.
+    refineFileTypeByFilename(detectFileType(headers), originalFilename) ??
     (isHourPivotHeader(headers) ? resolvePivotFileType(originalFilename) : null);
   if (!fileType) {
     // The header row as actually read is the only thing that can explain a
