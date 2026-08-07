@@ -1,7 +1,7 @@
 {
   "syncedAt": "2026-07-30T16:30:00.000Z",
   "source": "https://drive.google.com/drive/folders/1jt997djrqFtOVx0IfUgnPtc9uDOQKH8s",
-  "note": "SKILL.md + new-member-quality.md updated from Drive (benchmark cross-ref fix, stray row removal)",
+  "note": "SKILL.md + new-member-quality.md updated from Drive (benchmark cross-ref fix, stray row removal). DIVERGED SINCE: the currency-conversion instructions were rewritten in this repo (ทุกไฟล์ชี้ไปที่กฎกลางใน SKILL.md แทนการสอนสูตรแปลงเอง) — hashes below are pre-divergence on purpose. ต้องแก้ที่ claude.ai project/Drive ให้ตรงกันก่อนรัน sync:skill ครั้งถัดไป มิฉะนั้นการแก้จะถูกทับกลับ",
   "files": {
     "SKILL.md": {
       "bytes": 24889,

@@ -145,6 +145,19 @@ test('the ad_agent / referrer money columns get converted companions too', () =>
   assert.equal(out['Total Mems_THB'], undefined);
 });
 
+test('the hourly pivot grid converts its money cell but not its head-count twin', () => {
+  // `avg_bin` / `avg_mems` come from `parsePivotSheet`, not from a Power BI
+  // header, so neither looked like a money column — but avg_bin is baht on the
+  // same footing as BIn, and avg-bin-by-hour.md now tells the model to quote a
+  // `_THB` column that has to actually exist.
+  const money = normaliseRow({ weekday: 'Monday', hour: 21, avg_bin: 8 }, 'shwe666');
+  assert.equal(money.avg_bin_THB, 8 * 787);
+  assert.equal(money.avg_bin, 8, 'the raw cell survives for Power BI cross-checks');
+
+  const people = normaliseRow({ weekday: 'Monday', hour: 21, avg_mems: 8 }, 'shwe666');
+  assert.equal(people.avg_mems_THB, undefined, 'the members grid counts people, not baht');
+});
+
 test("the export's own ARPPU column and the derived one never collide", () => {
   // ad_agent/referrer carry `Total BIn Mems`, not the `BIn Mems` deriveMetrics
   // needs, so only one of the two ever produces an ARPPU_THB for a given row.

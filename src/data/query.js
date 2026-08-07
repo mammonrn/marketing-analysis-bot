@@ -142,12 +142,14 @@ function renderRow(record, meta) {
  *
  * `normaliseRow` has always added a correct `BIn_THB` beside the raw `BIn`,
  * and SH666's was right to the baht — but nothing ever told the model which
- * of the two to quote. Worse, `SKILL.md` teaches the conversion as something
- * the analyst performs (`df[col + "_THB"] = df[col] * FACTOR`), so from the
- * model's side `_THB` reads as a column it is supposed to produce, not one it
- * has been handed. Quoting the raw MMK figure as baht and multiplying the
- * already-converted one a second time were both consistent with its
- * instructions. This block is what makes them not.
+ * of the two to quote. Worse, `SKILL.md` used to teach the conversion as
+ * something the analyst performs (`df[col + "_THB"] = df[col] * FACTOR`), so
+ * from the model's side `_THB` read as a column it was supposed to produce,
+ * not one it had been handed. Quoting the raw MMK figure as baht and
+ * multiplying the already-converted one a second time were both consistent
+ * with its instructions. This block is what makes them not — and the skill
+ * files now point at this header instead of carrying a formula of their own,
+ * so the two no longer contradict each other.
  *
  * Every number comes from the site's own config entry, so a fourth site
  * describes itself correctly the day it is added.

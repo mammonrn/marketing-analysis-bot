@@ -15,28 +15,22 @@
 | **Verify%** | Verification Rate | % ของ New ที่ผ่านการยืนยันตัวตน — ค่าจาก Power BI เป็น decimal ต้องคูณ 100 ก่อนแสดง |
 | **1st New%** | 1st Deposit Same-Day Rate | % ของ New ที่สมัครแล้วฝากเงินเล่นในวันเดียวกันกับที่สมัคร — ยิ่งสูงยิ่งดี แสดงถึงคุณภาพ traffic |
 | **1st New Mems** | 1st Deposit Same-Day Members | จำนวนจริงของ member ที่สมัครแล้วฝากเงินเล่นในวันเดียวกัน |
-| **1st New (BIn)** | 1st New Billing In | ยอดเงินฝากรวมของ 1st New Mems — หน่วยเป็น MMK (ตัด 3 ศูนย์) ต้องแปลงเป็น THB ก่อนแสดงในรายงาน |
+| **1st New (BIn)** | 1st New Billing In | ยอดเงินฝากรวมของ 1st New Mems — เป็นเงิน ให้รายงานด้วย `1st New (BIn)_THB` |
 | **1st New (np%)** | 1st New No-Promo Rate | % ของ 1st New Mems ที่ฝากเงินโดยไม่รับโปรโมชั่น — ยิ่งสูงแสดงว่า member มีคุณภาพสูง ไม่ได้มาเพื่อล่าโปร |
 | **1st Day Mems** | 1st Day Deposit Members | จำนวน member ทั้งหมดที่ฝากเงินเป็นครั้งแรกในวันนั้น (ไม่ว่าจะสมัครวันไหน) |
-| **1st Day (BIn)** | 1st Day Billing In | ยอดเงินฝากรวมของ 1st Day Mems — หน่ยเป็น MMK (ตัด 3 ศูนย์) ต้องแปลงเป็น THB |
+| **1st Day (BIn)** | 1st Day Billing In | ยอดเงินฝากรวมของ 1st Day Mems — เป็นเงิน ให้รายงานด้วย `1st Day (BIn)_THB` |
 | **1st Day (np%)** | 1st Day No-Promo Rate | % ของ 1st Day Mems ที่ฝากเงินโดยไม่รับโปรโมชั่น |
 
 ---
 
-## การแปลงค่าเงิน (แตกต่างตามเว็บไซต์!)
+## หน่วยเงิน
 
-| เว็บ | สกุลเงิน | สูตร |
-|------|---------|------|
-| **shwe666** | MMK (พม่า) | `ค่าในไฟล์ × 1,000 × 0.787` |
-| **ubet89** | THB (ไทย) | `ค่าในไฟล์ × 1,000` |
-| **88fed** | THB (ไทย) | `ค่าในไฟล์ × 1,000` |
+> **หน่วยเงิน:** ข้อมูลที่ส่งมาถูกแปลงเป็นเงินบาทแล้วในคอลัมน์ที่ลงท้าย `_THB`
+> ให้อ้างอิงคอลัมน์เหล่านั้นเมื่อพูดถึงจำนวนเงิน ห้ามคำนวณแปลงค่าเงินเอง
+> (ดูรายละเอียดใน SKILL.md หัวข้อ "หน่วยเงินและการแสดงผล")
 
-ตัวอย่าง (shwe666 / MMK):
-- ไฟล์แสดง 1st New (BIn) = 8.98 → 8,980 MMK → ฿7,067
-- ไฟล์แสดง 1st Day (BIn) = 10.9 → 10,900 MMK → ฿8,578
-
-ตัวอย่าง (ubet89 / 88fed / THB):
-- ไฟล์แสดง 1st New (BIn) = 8.98 → ฿8,980 (ไม่ต้องแปลง)
+คอลัมน์เงินในไฟล์นี้: `1st New (BIn)_THB`, `1st Day (BIn)_THB`
+(สังเกตว่าชื่อมี `_THB` ติดกับวงเล็บ ไม่มีเว้นวรรค)
 
 ---
 
@@ -79,9 +73,11 @@ Ref. Rate = New (Ref.) / New × 100
 
 ### BIn per Member (คุณภาพเงินฝากต่อคน)
 
+เงินหารจำนวนคน ผลลัพธ์เป็นเงิน จึงต้องคำนวณจากคอลัมน์ `_THB` และตั้งชื่อผลลัพธ์ลงท้าย `_THB`
+
 ```
-BIn per 1st New Mem = 1st New (BIn) THB / 1st New Mems
-BIn per 1st Day Mem = 1st Day (BIn) THB / 1st Day Mems
+BIn per 1st New Mem_THB = 1st New (BIn)_THB / 1st New Mems
+BIn per 1st Day Mem_THB = 1st Day (BIn)_THB / 1st Day Mems
 ```
 - ถ้า BIn per Member สูงขึ้น = แต่ละคนฝากเงินมากขึ้น (คุณภาพ
  member ดีขึ้น)
@@ -93,7 +89,7 @@ BIn per 1st Day Mem = 1st Day (BIn) THB / 1st Day Mems
 > ⚠️ **แยก benchmark ตามเว็บ — อย่าใช้ปนกัน** เพราะ SH666 กับ U89 มีคุณภาพ
  traffic ต่างกันชัดเจนคนละทิศทาง
 
-| KPI | SH666 (เฉลี่ย�median) | U89 (เฉลี่ย/median) |
+| KPI | SH666 (เฉลี่ย/median) | U89 (เฉลี่ย/median) |
 |-----|------------------------|-----------------------|
 | Verify% | 74.8% / 75% | 66.0% / 66% |
 | 1st New% | 11.0% / 11% | 18.4% / 18% |
@@ -113,13 +109,17 @@ BIn per 1st Day Mem = 1st Day (BIn) THB / 1st Day Mems
 
 ## เปรียบเทียบเดือนต่อเดือน (Mar vs Apr 2026)
 
+> 📌 แถว `Avg 1st New (BIn)` เป็น **units ตามสเกลของไฟล์ Power BI** (ค่าดิบ) ไม่ใช่บาท —
+> ถ้าเก็บเป็นบาทจะผูกกับอัตราแลกเปลี่ยน ณ วันที่คำนวณ แล้วเพี้ยนทันทีที่ rate เปลี่ยน
+> ใช้ดูทิศทาง MoM ส่วนตัวเงินจริงอ่านจาก `1st New (BIn)_THB`
+
 | Metric | มีนาคม 2026 | เมษายน 2026* |
 |--------|------------|-------------|
 | Avg New | 773 | 680 |
 | Avg 1st New% | 10.3% | 8.1% |
 | Avg 1st New Mems | 80 | 53 |
 | Avg 1st Day Mems | 127 | 85 |
-| Avg 1st New (BIn) | ฿9,764 | ฿5,548 |
+| Avg 1st New (BIn) | 12.4 units | 7.0 units |
 | Avg 1st New (np%) | 78.4% | 85.7% |
 
 *เมษายนเป็นข้อมูลบางส่วน (ถึง 25 เม.ย.)
@@ -159,10 +159,10 @@ New → Verify → 1st New Mems → 1st Day Mems
 ## โครงสร้างรายงาน HTML สำหรับ New Member Quality
 
 ```
-1. Header         — ชื่อเว็บ | ช่วงเวลา | วันที่สร้าง | อัตราแปลง MMK→THB
+1. Header         — ชื่อเว็บ | ช่วงเวลา | วันที่สร้าง | อัตราแลกเปลี่ยนตามที่ระบบส่งมาในหัวข้อมูล
 2. Alert Banner    — วัน 1st New% ต่ำกว่า 7%, วัน BIn ต่ำผิดปกติ
 3. KPI Cards       — New รวม, 1st New Mems รวม, 1st New% เฉลี่ย,
-                     Verify% เฉลี่ย, 1st New (BIn) รวม (THB), 1st New (np%) เฉลี่ย
+                     Verify% เฉลี่ย, `1st New (BIn)_THB` รวม, 1st New (np%) เฉลี่ย
 4. Conversion Funnel — New → Verify → 1st New Mems (แสดงเป็น % drop-off แต่ละขั้น)
 5. เปรียบเทียบเดือน — ตาราง KPI เปรียบเทียบ MoM พร้อม % change
 6. Daily Trend     — กราฟ trend: New, 1st New%, 1st New Mems รายวัน
@@ -191,15 +191,13 @@ for col in pct_cols:
     if col in df.columns:
         df[col] = df[col] * 100
 
-# แปลงเงิน MMK → THB (ตัด 3 ศูนย์ แล้ว × 0.787)
-# shwe666: FACTOR = 1000 * 0.787 | ubet89/88fed: FACTOR = 1000
-FACTOR = 1000 * 0.787  # ปรับตามเว็บที่วิเคราะห์
-df['1st New (BIn) THB'] = df['1st New (BIn)'] * FACTOR
-df['1st Day (BIn) THB'] = df['1st Day (BIn)'] * FACTOR
+# ไม่ต้องแปลงค่าเงิน — คอลัมน์ '1st New (BIn)_THB' และ '1st Day (BIn)_THB'
+# มาพร้อมข้อมูลที่ระบบส่งให้แล้ว
 
 # Derived metrics
 df['Delayed 1st Deposit'] = df['1st Day Mems'] - df['1st New Mems']
 df['Ref. Rate%'] = df['New (Ref.)'] / df['New'] * 100
-df['BIn per 1st New Mem THB'] = df['1st New (BIn) THB'] / df['1st New Mems']
-df['BIn per 1st Day Mem THB'] = df['1st Day (BIn) THB'] / df['1st Day Mems']
+# เงินหารจำนวนคน → ผลลัพธ์เป็นเงิน ใช้คอลัมน์ _THB และตั้งชื่อลงท้าย _THB
+df['BIn per 1st New Mem_THB'] = df['1st New (BIn)_THB'] / df['1st New Mems']
+df['BIn per 1st Day Mem_THB'] = df['1st Day (BIn)_THB'] / df['1st Day Mems']
 ```
