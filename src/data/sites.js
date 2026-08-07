@@ -79,10 +79,18 @@ export const SITES = Object.fromEntries(
  */
 const fxOverrides = new Map();
 
-/** Applied by `fxRates.js` at startup and after each confirmed change. */
+/**
+ * Applied by `fxRates.js` at startup and after each confirmed change.
+ *
+ * The merged descriptor is built here, once per change, rather than on each
+ * lookup: `getSite` runs for every money column of every row, so a 600-row
+ * export asks thousands of times and rebuilding the object each time would be
+ * pure waste. Overrides change a handful of times a year.
+ */
 export function applyFxOverride(canonical, { fxRate, fxRateAsOf }) {
-  if (!SITES[canonical]) throw new Error(`Unknown site: ${canonical}`);
-  fxOverrides.set(canonical, { fxRate, fxRateAsOf });
+  const base = SITES[canonical];
+  if (!base) throw new Error(`Unknown site: ${canonical}`);
+  fxOverrides.set(canonical, describeSite(canonical, { ...base, fxRate, fxRateAsOf }));
 }
 
 /** Drops every override, returning each site to its config values (tests). */
@@ -92,13 +100,7 @@ export function clearFxOverrides() {
 
 /** Config plus any override — the values every caller should actually use. */
 function withOverride(site) {
-  const override = fxOverrides.get(site.canonical);
-  if (!override) return site;
-  return describeSite(site.canonical, {
-    ...site,
-    fxRate: override.fxRate,
-    fxRateAsOf: override.fxRateAsOf,
-  });
+  return fxOverrides.get(site.canonical) ?? site;
 }
 
 /** What config says, ignoring any override — for showing where a value came from. */
