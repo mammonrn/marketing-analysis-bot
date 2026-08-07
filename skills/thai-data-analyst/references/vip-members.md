@@ -29,35 +29,32 @@
 | **Agent** | Agent หรือช่องทางที่ member มาจาก | — |
 | **Last Login 2 Y** | Last Login to Yesterday — จำนวนวันที่ห่างจาก "เมื่อวาน" ถึงวัน login ล่าสุด เช่น = 0 คือ login เมื่อวาน, = 5 คือ login เมื่อ 5 วันก่อนเมื่อวาน | วัน |
 | **Last BIn 2 Y** | Last Billing to Yesterday — จำนวนวันที่ห่างจาก "เมื่อวาน" ถึงวันที่ฝากล่าสุด เช่น = 0 คือฝากเมื่อวาน, = 3 คือฝากเมื่อ 3 วันก่อนเมื่อวาน — **ใช้ตรวจ Lost** | วัน |
-| **BIn** | ยอดเงินฝากรวมทั้งหมด (MMK ตัด 3 ศูนย์) — **ใช้ตรวจ VIP** | MMK |
+| **BIn** | ยอดเงินฝากรวมทั้งหมด — **ใช้ตรวจ VIP (เทียบค่าดิบ)** | เงิน → ใช้ `BIn_THB` |
 | **BIn Counts** | จำนวนครั้งที่ฝากเงินทั้งหมด — **ใช้ตรวจ VIP** | ครั้ง |
 | **BIn Days** | จำนวนวันที่มีการฝากเงิน (ไม่ซ้ำกัน) — **ใช้ตรวจ VIP** | วัน |
-| **Bo** | ยอดที่ casino จ่ายออก (Bet Out / Winnings) | MMK |
-| **R** | Revenue จาก member คนนี้ (BIn - Bo - Bonus - Pro - Pass) | MMK |
+| **Bo** | ยอดที่ casino จ่ายออก (Bet Out / Winnings) | เงิน → ใช้ `Bo_THB` |
+| **R** | Revenue จาก member คนนี้ (BIn - Bo - Bonus - Pro - Pass) | เงิน → ใช้ `R_THB` |
 | **Pro Counts** | จำนวนครั้งที่รับโปรโมชั่น | ครั้ง |
-| **Pro** | ยอดโปรโมชั่นที่ได้รับรวม | MMK |
-| **Pass** | ยอด Passive/Cashback ที่ได้รับ | MMK |
-| **Bonus** | ยอด Bonus ที่ได้รับรวม | MMK |
-| **Med. BIn** | Median Billing — ค่ากลางของยอดฝากเงินต่อ 1 ครั้ง ของ member คนนั้น — ใช้วัดขนาดการฝากปกติ เช่น Med. BIn = 1.5 แปลว่าปกติฝากครั้งละ 1,500 MMK (฿1,181) | MMK |
+| **Pro** | ยอดโปรโมชั่นที่ได้รับรวม | เงิน → ใช้ `Pro_THB` |
+| **Pass** | ยอด Passive/Cashback ที่ได้รับ | เงิน → ใช้ `Pass_THB` |
+| **Bonus** | ยอด Bonus ที่ได้รับรวม | เงิน → ใช้ `Bonus_THB` |
+| **Med. BIn** | Median Billing — ค่ากลางของยอดฝากเงินต่อ 1 ครั้ง ของ member คนนั้น — ใช้วัดขนาดการฝากปกติ เช่น Med. BIn = 1.5 แปลว่าปกติฝากครั้งละ 1.5 units ตามสเกลไฟล์ (ดูจำนวนเงินจริงที่ `Med. BIn_THB`) | เงิน → ใช้ `Med. BIn_THB` |
 | **Phone** | เบอร์โทรศัพท์ (สำหรับติดต่อ) | — |
 
 ---
 
-## การแปลงค่าเงิน (แตกต่างตามเว็บไซต์!)
+## หน่วยเงิน
 
-| เว็บ | สกุลเงิน | สูตร |
-|------|---------|------|
-| **shwe666** | MMK (พม่า) | `ค่าในไฟล์ × 1,000 × 0.787` |
-| **ubet89** | THB (ไทย) | `ค่าในไฟล์ × 1,000` |
-| **88fed** | THB (ไทย) | `ค่าในไฟล์ × 1,000` |
+> **หน่วยเงิน:** ข้อมูลที่ส่งมาถูกแปลงเป็นเงินบาทแล้วในคอลัมน์ที่ลงท้าย `_THB`
+> ให้อ้างอิงคอลัมน์เหล่านั้นเมื่อพูดถึงจำนวนเงิน ห้ามคำนวณแปลงค่าเงินเอง
+> (ดูรายละเอียดใน SKILL.md หัวข้อ "หน่วยเงินและการแสดงผล")
 
-**ตัวอย่าง shwe666 (MMK):**
-- BIn = 926.6 → 926,600 MMK → ฿729,034
-- Med. BIn = 18 → 18,000 MMK → ฿14,166 ต่อครั้ง (high roller)
+คอลัมน์เงินในไฟล์นี้ที่มีคู่ `_THB` ให้ใช้: `BIn_THB`, `Bo_THB`, `R_THB`,
+`Pro_THB`, `Pass_THB`, `Bonus_THB`, `Med. BIn_THB`
 
-**ตัวอย่าง ubet89 / 88fed (THB):**
-- BIn = 926.6 → ฿926,600 (ไม่ต้องแปลง)
-- Med. BIn = 18 → ฿18,000 ต่อครั้ง
+⚠️ **ยกเว้นเกณฑ์ VIP** — `BIn >= 50` และ `Med. BIn >= 10` นิยามไว้บน**สเกลของ Power BI**
+ต้องเทียบกับคอลัมน์ดิบ (`BIn`, `Med. BIn`) ต่อไป ถ้าเปลี่ยนไปเทียบกับ `_THB` เกณฑ์จะเพี้ยน
+แต่เวลา**รายงานตัวเลขเงิน** ให้ใช้ `_THB` เสมอ
 
 ---
 
@@ -70,8 +67,8 @@ df = pd.read_excel("Vip.xlsx")
 df = df[df['Username'].notna()].copy()
 df = df[~df['Username'].astype(str).str.contains('Applied|filter', case=False, na=False)].copy()
 
-# VIP qualification check
-df['qual_BIn']    = df['BIn'] >= 50          # ฝากรวม >= 50 units MMK
+# VIP qualification check — เทียบกับคอลัมน์ดิบเสมอ (เกณฑ์นิยามบนสเกลของ Power BI)
+df['qual_BIn']    = df['BIn'] >= 50          # ฝากรวม >= 50 units (ค่าดิบตามไฟล์)
 df['qual_Counts'] = df['BIn Counts'] >= 100  # ฝาก >= 100 ครั้ง
 df['qual_Days']   = df['BIn Days'] >= 50     # ฝาก >= 50 วัน
 
@@ -79,41 +76,42 @@ df['qual_Days']   = df['BIn Days'] >= 50     # ฝาก >= 50 วัน
 df['is_Lost']   = df['Last BIn 2 Y'] > 7    # ไม่ได้ฝากนาน > 7 วัน
 df['is_Active'] = df['Last BIn 2 Y'] <= 7   # ฝากล่าสุดภายใน 7 วัน
 
-# Convert money
-# shwe666: FACTOR = 1000 * 0.787 | ubet89/88fed: FACTOR = 1000
-FACTOR = 1000 * 0.787  # ปรับตามเว็บที่วิเคราะห์
-for col in ['BIn', 'Bo', 'R', 'Pro', 'Pass', 'Bonus', 'Med. BIn']:
-    df[col + '_THB'] = df[col] * FACTOR
+# ไม่ต้องแปลงค่าเงิน — คอลัมน์ _THB มาพร้อมข้อมูลแล้ว
 
-# Revenue per BIn day (loyalty efficiency)
-df['R_per_BInDay'] = df['R'] / df['BIn Days']
+# Revenue per BIn day (loyalty efficiency) — เงินหารจำนวนวัน ผลลัพธ์เป็นเงิน
+# ต้องคำนวณจาก R_THB และตั้งชื่อลงท้าย _THB
+df['R_per_BInDay_THB'] = df['R_THB'] / df['BIn Days']
 ```
 
 ---
 
-## KPI Benchmarks (อ้างอิงจากข้อมูลจริง 318 VIP members)
+## KPI Benchmarks (อ้างอิงจากข้อมูลจริง SH666 318 VIP members)
+
+> 📌 ตัวเลขเงินในตารางนี้เป็น **units ตามสเกลของไฟล์ Power BI** (ค่าดิบ) ไม่ใช่บาท
+> ตั้งใจให้เป็นแบบนี้ เพราะถ้าเก็บเป็นบาทไว้ ตัวเลขจะผูกกับอัตราแลกเปลี่ยน ณ วันที่คำนวณ
+> แล้วเพี้ยนทันทีที่ rate เปลี่ยน — ให้เทียบกับ**คอลัมน์ดิบ** แต่เวลารายงานตัวเงินใช้ `_THB`
 
 | KPI | ค่าเฉลี่ย | หมายเหตุ |
 |-----|-----------|---------|
 | **VIP ทั้งหมด** | 318 คน | — |
 | **Active VIP** (Last BIn ≤7 วัน) | **191 คน (60.1%)** | — |
 | **Lost VIP** (Last BIn >7 วัน) | **127 คน (39.9%)** | นานเฉลี่ย 48 วัน |
-| BIn เฉลี่ย | ฿28,961 ต่อคน | — |
+| BIn เฉลี่ย | 36.8 units ต่อคน | เทียบเกณฑ์ VIP `BIn >= 50` ได้ตรงๆ |
 | BIn Counts เฉลี่ย | 244 ครั้ง | — |
 | BIn Days เฉลี่ย | 57 วัน | — |
-| Revenue เฉลี่ย | ฿5,324 ต่อคน | — |
-| Med. BIn (median) | ฿114 ต่อครั้ง | 75% < ฿287, Max ฿14,166 |
-| **BIn รวมทั้งกลุ่ม** | **฿9,209,474** | 6 เดือน+ |
-| **Revenue รวมทั้งกลุ่ม** | **฿1,693,129** | |
+| Revenue เฉลี่ย | 6.8 units ต่อคน | — |
+| Med. BIn (median) | 0.14 units ต่อครั้ง | 75% < 0.36 units, Max 18.0 units |
+| **BIn รวมทั้งกลุ่ม** | **~11,700 units** | 6 เดือน+ |
+| **Revenue รวมทั้งกลุ่ม** | **~2,150 units** | |
 
 ### Lost VIP Stats (ควรทำ re-engagement)
 
 | KPI | ค่าเฉลี่ย |
 |-----|-----------|
 | วันที่หายไป (Last BIn) | 48 วัน |
-| BIn เฉลี่ย | ฿22,231 |
+| BIn เฉลี่ย | 28.3 units |
 | BIn Counts เฉลี่ย | 198 ครั้ง |
-| Revenue เฉลี่ย | ฿3,892 |
+| Revenue เฉลี่ย | 4.9 units |
 
 ---
 
@@ -162,8 +160,11 @@ df['R_per_BInDay'] = df['R'] / df['BIn Days']
 High BIn   = BIn >= 200 (top tier)
 Medium BIn = BIn 50-199
 High Count = BIn Counts >= 500 (active player)
-Big Bettor = Med. BIn >= 10 (Median Billing ≥ 10 units = ฝากครั้งละ ≥ 7,870 THB)
+Big Bettor = Med. BIn >= 10 (Median Billing ≥ 10 units)
 ```
+
+⚠️ เกณฑ์ทั้ง 4 ข้อนี้นิยามบน**สเกลของ Power BI** ให้เทียบกับคอลัมน์ดิบ (`BIn`, `Med. BIn`)
+ไม่ใช่ `_THB` — แต่ตอนรายงานว่ากลุ่มนี้มียอดเท่าไหร่ ให้ใช้ `BIn_THB` / `Med. BIn_THB`
 
 ### D. Lost VIP Priority
 - เรียง Lost VIP ตาม BIn DESC → คนที่เคยฝากมาก = ต้องติดต่อก่อน

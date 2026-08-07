@@ -98,6 +98,14 @@ const MONEY_COLUMNS = new Set([
   // collide: the files that carry this column have `Total BIn Mems` rather
   // than the `BIn Mems` that `deriveMetrics` requires.
   'ARPPU', 'Pw', 'Ref Bonus',
+  // `avg_bin` is not a Power BI column name — it is what `parsePivotSheet`
+  // calls the cell of the "Average BIn (Week Day × Hour)" grid, and it is
+  // baht-denominated exactly like BIn. Missing here, it was the one money
+  // figure in the whole corpus reaching the model with no converted companion
+  // at all, which is why avg-bin-by-hour.md could not point at a `_THB` column
+  // the way every other reference file now does. Its sibling grid's
+  // `avg_mems` is a head count and correctly stays out.
+  'avg_bin',
 ]);
 
 const PERCENT_COLUMNS = new Set([
