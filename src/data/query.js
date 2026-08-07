@@ -9,6 +9,7 @@
 import { getFileType, FILE_TYPES } from './fileTypes.js';
 import { siteDisplayName, getSite } from './sites.js';
 import { normaliseRow, deriveMetrics, toNumber } from './transform.js';
+import { thresholdGroupsFor, countByThresholds } from './thresholds.js';
 import { ensureParsed } from './parse.js';
 import { findRawFile, queryParsedRows, listRawFiles } from './db.js';
 import { logger } from '../logger.js';
@@ -325,6 +326,78 @@ function orderStatsForReading(stats) {
 }
 
 /**
+ * Ratios the summary states outright instead of leaving to the model.
+ *
+ * Everything else in the block — sum, avg, min, max — is computed here and
+ * quoted back correctly. A ratio was the one figure the model had to work out
+ * for itself, and on `vip.xlsx` it answered 24.3% three times running: the
+ * `daily_value` R/BIn for the whole site, from an earlier turn in the same
+ * conversation, rather than 22.31% from the VIP rows in front of it. Nothing
+ * in the context was wrong; the number simply was not there, and the nearest
+ * plausible one was.
+ *
+ * Computed from the two sums, not as the mean of the per-row ratios. Those are
+ * different numbers whenever the rows differ in size — the mean lets a member
+ * who deposited 20 baht count as much as one who deposited 200,000 — and the
+ * sum-based figure is the one the reference files' benchmarks mean.
+ *
+ * Raw columns rather than `_THB`: the site factor appears in both halves and
+ * cancels, so the result is identical and needs no site to compute.
+ */
+const SUMMARY_RATIOS = [
+  {
+    label: 'R / BIn',
+    numerator: 'R',
+    denominator: 'BIn',
+    note: 'กำไรต่อยอดเติมเงินของทั้งไฟล์นี้',
+  },
+];
+
+/**
+ * The threshold counts, as summary lines. Same contract as the stats above:
+ * computed here over every row, quoted rather than derived by the model.
+ */
+function thresholdSummaryLines(records, fileType) {
+  const groups = thresholdGroupsFor(fileType);
+  if (groups.length === 0) return [];
+
+  const lines = [];
+  for (const group of groups) {
+    const result = countByThresholds(records, group);
+    if (result.counted === 0) continue;
+
+    lines.push(`- นับตามเกณฑ์จากคอลัมน์ \`${result.column}\` (จาก ${result.counted} แถวที่มีค่า):`);
+    for (const bucket of result.buckets) {
+      lines.push(`  • ${bucket.label}: ${bucket.count} แถว (${fmt(bucket.pct)}%)`);
+    }
+    if (result.missing > 0) {
+      lines.push(
+        `  • อีก ${result.missing} แถวไม่มีค่าในคอลัมน์นี้ ` +
+          `จึงไม่ถูกนับรวมทั้งในจำนวนและใน % ข้างบน`,
+      );
+    }
+  }
+  return lines;
+}
+
+function ratioSummaryLines(stats) {
+  const byColumn = new Map(stats.map((stat) => [stat.column, stat]));
+
+  return SUMMARY_RATIOS.flatMap(({ label, numerator, denominator, note }) => {
+    const top = byColumn.get(numerator);
+    const bottom = byColumn.get(denominator);
+    if (!top || !bottom || !bottom.sum) return [];
+
+    const pct = (top.sum / bottom.sum) * 100;
+    return [
+      `- ${label} = ${fmt(pct)}%  ` +
+        `(คำนวณจากผลรวมทั้งไฟล์: ${numerator} ${fmt(top.sum)} ÷ ${denominator} ${fmt(bottom.sum)}) ` +
+        `— ${note} **ใช้ค่านี้ ห้ามคำนวณเองและห้ามใช้ค่าจากไฟล์อื่น**`,
+    ];
+  });
+}
+
+/**
  * Picks the rows worth showing alongside the summary, and says how they were
  * picked — the caller has to tell Claude the selection rule, or a "top 15 by
  * deposits" list reads as "the whole file".
@@ -416,13 +489,23 @@ export function formatContext({ site, fileType, availableMonths, rows }) {
       (s.unit ? ` — หน่วย: ${s.unit}` : ''),
   );
 
+  const records = entries.map((entry) => entry.record);
+  const ratioLines = ratioSummaryLines(stats);
+  const thresholdLines = thresholdSummaryLines(records, fileType);
+
   const summaryBlock =
     `===== สรุปสถิติ — คำนวณจากข้อมูลจริงครบทั้ง ${rows.length} แถว =====\n` +
     `ตัวเลขในบล็อกนี้ถูกต้อง 100% ใช้ตอบคำถามภาพรวมได้เต็มที่ ` +
     `(ค่าเฉลี่ยคิดจากเฉพาะแถวที่มีค่าตัวเลข ตามจำนวนที่กำกับไว้ท้ายแต่ละบรรทัด)\n` +
+    `⚠️ ตัวเลขทุกตัวในบล็อกนี้เป็นของ**ไฟล์ชุดนี้เท่านั้น** (${type?.label ?? fileType} — ` +
+    `${siteDisplayName(site)} — ${availableMonths.join(', ')}) ` +
+    `ห้ามนำค่าจากไฟล์ประเภทอื่น หรือจากคำตอบก่อนหน้าในบทสนทนา มาใช้แทนค่าในบล็อกนี้ ` +
+    `ถ้าตัวเลขที่ต้องใช้ไม่มีอยู่ในบล็อกนี้ ให้บอกว่าไม่มี — ห้ามหยิบตัวเลขที่ใกล้เคียงจากที่อื่นมาตอบ\n` +
     (summaryLines.length > 0
       ? summaryLines.join('\n')
-      : '(ไม่พบคอลัมน์ตัวเลขที่เป็น metric ในไฟล์นี้)');
+      : '(ไม่พบคอลัมน์ตัวเลขที่เป็น metric ในไฟล์นี้)') +
+    (ratioLines.length > 0 ? `\n\n${ratioLines.join('\n')}` : '') +
+    (thresholdLines.length > 0 ? `\n\n${thresholdLines.join('\n')}` : '');
 
   const sampleBlock =
     `===== ตัวอย่างข้อมูลรายแถว ${sample.rows.length} แถว จากทั้งหมด ${rows.length} แถว =====\n` +

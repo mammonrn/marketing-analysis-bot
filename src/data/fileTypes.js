@@ -24,6 +24,12 @@
  *   column that ingest reads to work out which month the file belongs to.
  * - `pivot: true` — the sheet is a cross-tab, not a row-per-record table, so
  *   `parsePivotSheet` reshapes it instead of `readSheet`.
+ * - `leadColumnIsUserText: true` — the sheet's first column holds something a
+ *   person typed (a username, a channel name) rather than an axis Power BI
+ *   controls. `dropNonDataRows` then refuses to treat a leading "Total" /
+ *   "sum" / "รวม" as furniture on its own, because on these files it is a
+ *   real member. Left unset for date axes and fixed vocabularies (GameKind),
+ *   where such a label can only be Power BI's own total row.
  * - no `signature` — the type cannot be told apart from its header row alone
  *   (the two hour-pivot exports are byte-identical up there). `detectFileType`
  *   skips those; `ingest.js` resolves them from the filename instead.
@@ -42,6 +48,8 @@ export const FILE_TYPES = [
     label: 'VIP Members',
     referenceFile: 'vip-members.md',
     dateColumn: null,
+    // Leading column is `Username`. See `dropNonDataRows`.
+    leadColumnIsUserText: true,
     signature: (headers) => headers.has('Last BIn 2 Y'),
   },
   {
@@ -89,6 +97,8 @@ export const FILE_TYPES = [
     label: 'AD / Agent',
     referenceFile: 'ad-agent.md',
     dateColumn: null,
+    // Leading column is a channel/agent name someone typed.
+    leadColumnIsUserText: true,
     signature: (headers) => headers.has('AD / Agent'),
   },
   {
@@ -96,6 +106,8 @@ export const FILE_TYPES = [
     label: 'Referrer',
     referenceFile: 'referrer.md',
     dateColumn: null,
+    // Leading column is the referrer's username.
+    leadColumnIsUserText: true,
     signature: (headers) => headers.has('Ref Bonus'),
   },
   {
@@ -103,6 +115,8 @@ export const FILE_TYPES = [
     label: 'Member Detail',
     referenceFile: 'member-detail.md',
     dateColumn: null,
+    // Leading column is `Username`.
+    leadColumnIsUserText: true,
     signature: (headers) => headers.has('Prefer Game'),
   },
   {
