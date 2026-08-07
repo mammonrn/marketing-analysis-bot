@@ -15,6 +15,19 @@ import {
   resolvePendingDuplicate,
   hasPendingUpload,
 } from '../data/ingest.js';
+import {
+  currentFxRate,
+  validateFxRate,
+  applyFxRateUpdate,
+  checkFxRateStale,
+  alertDue,
+  markAlerted,
+  formatStaleWarning,
+  MIN_FX_RATE,
+  MAX_FX_RATE,
+  LARGE_CHANGE_RATIO,
+} from '../data/fxRates.js';
+import { setPendingFxUpdate, getPendingFxUpdate, clearPendingFxUpdate } from '../data/db.js';
 import { inspectSkillBundle } from '../prompt/loader.js';
 import {
   getOrCreateSession,
@@ -40,6 +53,7 @@ const HELP_TEXT = [
   '`/สรุป` — สรุปภาพรวม session + dashboard',
   '`/จบ` — จบ session แล้วสรุป',
   '`/เว็บ SH666` — เปลี่ยนเว็บที่กำลังคุย',
+  '`/fxrate` — ดูอัตราแลกเปลี่ยนที่ใช้อยู่ (เปลี่ยนได้เฉพาะ Super Admin)',
   '`/whoami` — ดู Telegram ID ของคุณ',
   '',
   `เว็บที่รองรับ: ${ALL_SITE_KEYS.map(siteDisplayName).join(' / ')}`,
@@ -52,6 +66,8 @@ const HELP_TEXT = [
 
 const UPLOAD_CONFIRM_YES = 'upload:yes';
 const UPLOAD_CONFIRM_NO = 'upload:no';
+const FX_CONFIRM_YES = 'fx:yes';
+const FX_CONFIRM_NO = 'fx:no';
 
 function fileTypeLabel(fileType) {
   return getFileType(fileType)?.label ?? fileType;
@@ -68,6 +84,57 @@ const DUPLICATE_KEYBOARD = {
   },
 };
 
+const FX_KEYBOARD = {
+  reply_markup: {
+    inline_keyboard: [
+      [
+        { text: '✅ ยืนยันเปลี่ยน', callback_data: FX_CONFIRM_YES },
+        { text: '❌ ยกเลิก', callback_data: FX_CONFIRM_NO },
+      ],
+    ],
+  },
+};
+
+const FX_REJECTION = {
+  empty: 'ไม่ได้ระบุอัตรามาครับ',
+  not_a_number: 'อัตราต้องเป็นตัวเลขเท่านั้นครับ',
+  not_positive: 'อัตราต้องมากกว่า 0 ครับ',
+  too_small: `อัตราต่ำกว่า ${MIN_FX_RATE} — น้อยเกินกว่าจะเป็นอัตราจริงครับ`,
+  // Named explicitly because it is the mistake this check exists for: the
+  // ×1,000 de-scaling and the FX rate look alike, and 787 for 0.787 would
+  // inflate every reported figure a thousandfold.
+  too_large:
+    `อัตราสูงกว่า ${MAX_FX_RATE} — น่าจะพิมพ์ตัวคูณ 1,000 มารวมด้วย ` +
+    'ให้ใส่เฉพาะอัตราแลกเปลี่ยน เช่น `0.787` ไม่ใช่ `787` ครับ',
+};
+
+/**
+ * Checks whether this site's rate has fallen behind its data, and says so at
+ * most once a week.
+ *
+ * Runs after an upload lands because that is the moment the newest data date
+ * can move — which is the only thing on either side of the comparison that
+ * changes on its own.
+ */
+async function warnIfFxRateStale(telegram, chatId, site) {
+  if (!site) return;
+  try {
+    const check = checkFxRateStale(site);
+    if (!check.stale || !alertDue(site)) return;
+    markAlerted(site);
+    logger.info('fx rate staleness warning sent', {
+      site,
+      gapDays: check.gapDays,
+      fxRateAsOf: check.fxRateAsOf,
+      dataDate: check.dataDate,
+    });
+    await sendSafe(telegram, chatId, formatStaleWarning(check));
+  } catch (err) {
+    // A missing warning must never cost the user their upload confirmation.
+    logger.warn('fx staleness check failed', { site, message: err?.message });
+  }
+}
+
 /**
  * Reports on a whole batch at once.
  *
@@ -75,7 +142,7 @@ const DUPLICATE_KEYBOARD = {
  * waiting, so the reply has to account for all of them — a per-file message
  * would be eleven notifications for one answer.
  */
-function respondToBatchResult(ctx, batch) {
+async function respondToBatchResult(ctx, batch) {
   const chatId = ctx.chat.id;
   if (batch.status !== 'resolved') return respondToUploadResult(ctx, batch);
 
@@ -114,11 +181,13 @@ function respondToBatchResult(ctx, batch) {
   }
 
   if (lines.length === 0) return undefined;
-  return sendSafe(ctx.telegram, chatId, lines.join('\n'));
+  await sendSafe(ctx.telegram, chatId, lines.join('\n'));
+  // One site answers for the whole batch, so one check covers it.
+  return warnIfFxRateStale(ctx.telegram, chatId, saved[0]?.site);
 }
 
 /** Shared by the document handler, the pending-site text reply, and the duplicate-confirm buttons. */
-function respondToUploadResult(ctx, result) {
+async function respondToUploadResult(ctx, result) {
   const chatId = ctx.chat.id;
 
   switch (result.status) {
@@ -157,11 +226,14 @@ function respondToUploadResult(ctx, result) {
         DUPLICATE_KEYBOARD,
       );
     case 'saved':
-      return sendSafe(
+      await sendSafe(
         ctx.telegram,
         chatId,
         `✅ รับไฟล์ *${fileTypeLabel(result.fileType)}* ของ *${siteDisplayName(result.site)}* เดือน ${result.yearMonth} แล้วครับ`,
       );
+      // Here, because a new upload is the only thing that moves the newest
+      // data date — the other side of the staleness comparison.
+      return warnIfFxRateStale(ctx.telegram, chatId, result.site);
     case 'kept_existing':
       return sendSafe(ctx.telegram, chatId, 'โอเคครับ ไม่อัปเดตทับไฟล์เดิม');
     case 'no_pending':
@@ -230,6 +302,154 @@ async function handleDocumentUpload(ctx) {
   return respondToUploadResult(ctx, result);
 }
 
+/** Every site's rate, where it came from, and how to change one. */
+function fxRateOverview() {
+  const lines = ['*อัตราแลกเปลี่ยนที่ใช้อยู่*', ''];
+  for (const key of ALL_SITE_KEYS) {
+    const rate = currentFxRate(key);
+    if (!rate) continue;
+    const origin = rate.source === 'override' ? 'ตั้งผ่านแชท' : 'ค่าตั้งต้นใน config';
+    lines.push(
+      `*${siteDisplayName(key)}* — ${rate.currency} → THB`,
+      `  อัตรา: \`${rate.fxRate}\`  (ณ ${rate.fxRateAsOf}, ${origin})`,
+    );
+  }
+  lines.push('', 'เปลี่ยนค่า: `/fxrate SH666 0.812` (Super Admin เท่านั้น)');
+  return lines.join('\n');
+}
+
+/**
+ * Stages a rate change. Nothing is written here — the write happens only when
+ * the confirm button comes back.
+ */
+export async function handleFxRateCommand(ctx, argText) {
+  const chatId = ctx.chat.id;
+  const userId = ctx.from.id;
+  const args = String(argText ?? '').trim().split(/\s+/).filter(Boolean);
+
+  // Reading the current rates is not a privileged action; changing one is.
+  if (args.length === 0) return sendSafe(ctx.telegram, chatId, fxRateOverview());
+
+  // Checked on the numeric Telegram id only. A username can be changed by its
+  // owner at any time, so authorising on one would let anyone who claims a
+  // freed handle inherit the permission.
+  if (!isSuperAdmin(userId)) {
+    logger.warn('non-admin attempted to change an fx rate', {
+      userId,
+      username: ctx.from?.username,
+      chatId,
+      attempted: args.join(' '),
+    });
+    return sendSafe(
+      ctx.telegram,
+      chatId,
+      '⛔ การเปลี่ยนอัตราแลกเปลี่ยนทำได้เฉพาะ Super Admin ครับ\n' +
+        'ดูอัตราปัจจุบันได้ด้วย `/fxrate` เฉย ๆ',
+    );
+  }
+
+  const [siteArg, rateArg, ...rest] = args;
+  if (!rateArg || rest.length > 0) {
+    return sendSafe(ctx.telegram, chatId, 'รูปแบบ: `/fxrate <เว็บ> <อัตรา>` เช่น `/fxrate SH666 0.812`');
+  }
+
+  const site = detectSite(siteArg);
+  if (!site) {
+    return sendSafe(
+      ctx.telegram,
+      chatId,
+      `ไม่รู้จักเว็บ "${siteArg}" ครับ — ใช้ได้: ${ALL_SITE_KEYS.map(siteDisplayName).join(' / ')}`,
+    );
+  }
+
+  const current = currentFxRate(site);
+  const check = validateFxRate(rateArg, current.fxRate);
+  if (!check.ok) {
+    return sendSafe(
+      ctx.telegram,
+      chatId,
+      `⚠️ ${FX_REJECTION[check.reason] ?? 'อัตราไม่ถูกต้องครับ'}\n\n` +
+        `ค่าที่ใส่มา: \`${rateArg}\`\nอัตราปัจจุบันของ ${siteDisplayName(site)}: \`${current.fxRate}\``,
+    );
+  }
+
+  setPendingFxUpdate(chatId, {
+    site,
+    fxRate: check.value,
+    previousRate: current.fxRate,
+    requestedBy: userId,
+  });
+
+  const lines = [
+    `*ยืนยันการเปลี่ยนอัตราแลกเปลี่ยน*`,
+    '',
+    `เว็บ: *${siteDisplayName(site)}* (${current.currency} → THB)`,
+    `จาก: \`${current.fxRate}\` (ณ ${current.fxRateAsOf})`,
+    `เป็น: \`${check.value}\``,
+  ];
+
+  if (check.largeChange) {
+    const pct = Math.round((Math.abs(check.value - current.fxRate) / current.fxRate) * 100);
+    lines.push(
+      '',
+      `🚨 *ค่าใหม่ต่างจากเดิม ${pct}%* (เกิน ${LARGE_CHANGE_RATIO * 100}%)`,
+      'ตรวจอีกครั้งว่าไม่ได้พิมพ์ทศนิยมผิดตำแหน่งครับ',
+    );
+  }
+
+  lines.push(
+    '',
+    `ตัวเลขเงินบาททั้งหมดของ ${siteDisplayName(site)} จะคิดด้วยอัตราใหม่ทันทีหลังยืนยัน`,
+    'ยืนยันไหมครับ',
+  );
+
+  return sendSafe(ctx.telegram, chatId, lines.join('\n'), FX_KEYBOARD);
+}
+
+/**
+ * Writes a staged rate change, once someone entitled to has confirmed it.
+ *
+ * Exported for tests: this is the only path in the bot that changes how every
+ * reported amount of money is scaled, so the two gates on it — a staged record
+ * must exist, and the person pressing the button must be Super Admin — are
+ * worth asserting directly rather than through Telegraf.
+ */
+export async function confirmFxRateUpdate(ctx) {
+  const chatId = ctx.chat.id;
+  const pending = getPendingFxUpdate(chatId);
+  if (!pending) {
+    return sendSafe(ctx.telegram, chatId, 'ไม่พบรายการที่รอยืนยันครับ — อาจยืนยันไปแล้วหรือหมดอายุ');
+  }
+
+  // Re-checked at the moment of the write, not only when the button was drawn:
+  // the message carrying it is visible to everyone in the chat, so the person
+  // who pressed it need not be the one who asked.
+  if (!isSuperAdmin(ctx.from.id)) {
+    logger.warn('non-admin pressed the fx confirm button', {
+      userId: ctx.from.id,
+      username: ctx.from?.username,
+      chatId,
+      site: pending.site,
+    });
+    return sendSafe(ctx.telegram, chatId, '⛔ ยืนยันได้เฉพาะ Super Admin ครับ');
+  }
+
+  clearPendingFxUpdate(chatId);
+  const applied = applyFxRateUpdate({
+    site: pending.site,
+    fxRate: pending.fx_rate,
+    updatedBy: ctx.from.id,
+  });
+
+  return sendSafe(
+    ctx.telegram,
+    chatId,
+    `✅ เปลี่ยนอัตราแลกเปลี่ยนของ *${siteDisplayName(applied.site)}* แล้วครับ\n` +
+      `\`${applied.previousRate}\` → \`${applied.fxRate}\` (ณ ${applied.fxRateAsOf})\n\n` +
+      '_ตัวเลขเงินบาทหลังจากนี้คิดด้วยอัตราใหม่ทั้งหมด_',
+  );
+}
+
 /**
  * Thai slash-commands have to be matched by hand.
  * Telegram only tags `/word` as a bot_command entity when the word is ASCII, so
@@ -241,6 +461,9 @@ const THAI_COMMANDS = [
   { re: /^\/?\s*(จบ|จบเลย|จบ session|ปิด session)\s*$/i, action: 'summary' },
   { re: /^\/?\s*(ช่วยเหลือ|วิธีใช้)\s*$/, action: 'help' },
   { re: /^\/?\s*เว็บ\s+(.+)$/, action: 'setSite' },
+  // Slash required: "เรท" and "อัตราแลกเปลี่ยน" both turn up inside ordinary
+  // questions, which must still reach Claude.
+  { re: /^\/\s*(?:อัตราแลกเปลี่ยน|เรท)\s*(.*)$/, action: 'fxRate' },
 ];
 
 function matchThaiCommand(text) {
@@ -382,6 +605,10 @@ export function createBot() {
     return applySiteChange(ctx, arg);
   });
 
+  bot.command(['fxrate', 'rate'], (ctx) =>
+    handleFxRateCommand(ctx, ctx.message.text.split(/\s+/).slice(1).join(' ')),
+  );
+
   bot.command('status', async (ctx) => {
     if (!isSuperAdmin(ctx.from.id)) {
       return sendSafe(ctx.telegram, ctx.chat.id, 'คำสั่งนี้ใช้ได้เฉพาะ Super Admin ครับ');
@@ -426,6 +653,19 @@ export function createBot() {
     return respondToBatchResult(ctx, resolvePendingDuplicate(ctx.chat.id, false));
   });
 
+  bot.action(FX_CONFIRM_YES, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+    return confirmFxRateUpdate(ctx);
+  });
+
+  bot.action(FX_CONFIRM_NO, async (ctx) => {
+    await ctx.answerCbQuery('ยกเลิกแล้ว').catch(() => {});
+    await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+    clearPendingFxUpdate(ctx.chat.id);
+    return sendSafe(ctx.telegram, ctx.chat.id, 'โอเคครับ ไม่เปลี่ยนอัตราแลกเปลี่ยน');
+  });
+
   bot.action(SUMMARY_YES, async (ctx) => {
     await ctx.answerCbQuery('กำลังสรุป...').catch(() => {});
     await ctx.editMessageReplyMarkup(undefined).catch(() => {});
@@ -451,6 +691,7 @@ export function createBot() {
     if (command?.action === 'summary') return runSummary(ctx.telegram, ctx.chat.id);
     if (command?.action === 'help') return sendSafe(ctx.telegram, ctx.chat.id, HELP_TEXT);
     if (command?.action === 'setSite') return applySiteChange(ctx, command.arg);
+    if (command?.action === 'fxRate') return handleFxRateCommand(ctx, command.arg);
 
     // An unrecognised ASCII slash-command should not be sent to Claude as a question.
     if (/^\//.test(text) && /^\/[a-z0-9_]+/i.test(text)) {

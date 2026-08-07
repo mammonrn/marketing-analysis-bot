@@ -57,9 +57,54 @@ function describeSite(canonical, entry) {
   };
 }
 
+/** The config baseline. Runtime rate overrides are layered on by `getSite`. */
 export const SITES = Object.fromEntries(
   Object.entries(raw).map(([canonical, entry]) => [canonical, describeSite(canonical, entry)]),
 );
+
+/**
+ * Rates changed from chat, layered over the config baseline.
+ *
+ * Kept here, in the module every consumer of a rate already goes through, so
+ * that `toThb`, `deriveMetrics` and the data-context header all pick a change
+ * up with no plumbing of their own. `fxRates.js` owns loading these from
+ * SQLite and writing them back; this module never imports the database —
+ * `transform.js` sits below `workbook.js` on the worker thread, and
+ * better-sqlite3 must never be loaded there.
+ *
+ * A consequence worth stating: the worker thread starts with an empty map. It
+ * never converts money — it only reads and reshapes rows — so this costs
+ * nothing today, but a future metric computed on the worker would silently use
+ * the config rate.
+ */
+const fxOverrides = new Map();
+
+/** Applied by `fxRates.js` at startup and after each confirmed change. */
+export function applyFxOverride(canonical, { fxRate, fxRateAsOf }) {
+  if (!SITES[canonical]) throw new Error(`Unknown site: ${canonical}`);
+  fxOverrides.set(canonical, { fxRate, fxRateAsOf });
+}
+
+/** Drops every override, returning each site to its config values (tests). */
+export function clearFxOverrides() {
+  fxOverrides.clear();
+}
+
+/** Config plus any override — the values every caller should actually use. */
+function withOverride(site) {
+  const override = fxOverrides.get(site.canonical);
+  if (!override) return site;
+  return describeSite(site.canonical, {
+    ...site,
+    fxRate: override.fxRate,
+    fxRateAsOf: override.fxRateAsOf,
+  });
+}
+
+/** What config says, ignoring any override — for showing where a value came from. */
+export function getConfiguredSite(canonical) {
+  return SITES[canonical] ?? null;
+}
 
 export const ALL_SITE_KEYS = Object.keys(SITES);
 
@@ -73,12 +118,16 @@ function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Exact alias/canonical-key lookup (case-insensitive), e.g. from a folder path or a clean token. */
+/**
+ * Exact alias/canonical-key lookup (case-insensitive), e.g. from a folder path
+ * or a clean token. Returns the site with any runtime rate override already
+ * applied — this is the single point every money conversion passes through.
+ */
 export function getSite(input) {
   if (!input) return null;
   const needle = String(input).trim().toLowerCase();
   const hit = ALIAS_INDEX.find(({ alias }) => alias.toLowerCase() === needle);
-  return hit ? SITES[hit.canonical] : null;
+  return hit ? withOverride(SITES[hit.canonical]) : null;
 }
 
 /** Find a site mentioned anywhere in free text (a question, a caption, a filename). */
