@@ -8,7 +8,7 @@
 
 import { getFileType, FILE_TYPES } from './fileTypes.js';
 import { siteDisplayName } from './sites.js';
-import { normaliseRow, deriveMetrics } from './transform.js';
+import { normaliseRow, deriveMetrics, toNumber } from './transform.js';
 import { ensureParsed } from './parse.js';
 import { findRawFile, queryParsedRows, listRawFiles } from './db.js';
 import { logger } from '../logger.js';
@@ -44,21 +44,199 @@ function lastNYearMonths(n, from = new Date()) {
   return out;
 }
 
-function formatContext({ site, fileType, availableMonths, rows }) {
-  const type = getFileType(fileType);
-  const lines = rows.map((r) => {
-    const enriched = { ...normaliseRow(r.row, site), ...deriveMetrics(r.row) };
-    const meta = r.row_date ? `${r.year_month} ${r.row_date}` : r.year_month;
-    return `[${meta}] ${JSON.stringify(enriched)}`;
-  });
+/**
+ * At or below this many rows every row is sent verbatim, exactly as before.
+ * The ordinary daily exports are a few dozen rows and must not change shape.
+ */
+const DETAIL_ROW_LIMIT = 30;
 
-  return (
+/** How many real rows accompany the summary once a file is too big to send whole. */
+const SAMPLE_ROW_LIMIT = 15;
+
+/**
+ * A column that parses as a number is not necessarily a metric. Summing
+ * member ids or phone numbers produces a confident-looking figure that means
+ * nothing, so anything named like an identifier is excluded.
+ *
+ * `(^|_)id($|_)` already covers both `member_id` and `id_foo`, so no separate
+ * prefix/suffix test is needed.
+ */
+const IDENTIFIER_NAME =
+  /(^|_)(id|no|code|rank|order|seq|phone|tel|mobile|account|acc)($|_)/i;
+
+/** Spaces and punctuation are normalised to `_` so "Member ID" is caught too. */
+function looksLikeIdentifierName(name) {
+  return IDENTIFIER_NAME.test(String(name).trim().replace(/[\s.\-/()]+/g, '_'));
+}
+
+/**
+ * The second identifier test, on the values rather than the name: whole
+ * numbers that are almost all distinct are keys, not measurements. A real
+ * metric repeats itself.
+ */
+function looksLikeIdentifierValues(values, rowCount) {
+  if (values.length === 0 || rowCount === 0) return false;
+  if (!values.every((value) => Number.isInteger(value))) return false;
+  return new Set(values).size >= rowCount * 0.95;
+}
+
+/**
+ * Columns worth summarising, discovered from the data rather than declared
+ * per file type — the exports gain and lose columns over time and a hardcoded
+ * list would quietly stop covering them.
+ *
+ * A column counts as numeric only if every non-empty value parses as a
+ * number; one stray label means it is a text column that happens to contain
+ * digits, not a metric.
+ */
+function numericColumnStats(records) {
+  const seen = new Map();
+
+  for (const record of records) {
+    for (const [column, raw] of Object.entries(record)) {
+      if (!seen.has(column)) seen.set(column, { values: [], nonNumeric: 0 });
+      const entry = seen.get(column);
+
+      if (raw === null || raw === undefined || raw === '') continue;
+      const value = toNumber(raw);
+      if (value === null) entry.nonNumeric += 1;
+      else entry.values.push(value);
+    }
+  }
+
+  const stats = [];
+  for (const [column, { values, nonNumeric }] of seen) {
+    if (values.length === 0 || nonNumeric > 0) continue;
+    if (looksLikeIdentifierName(column)) continue;
+    if (looksLikeIdentifierValues(values, records.length)) continue;
+
+    const sum = values.reduce((total, value) => total + value, 0);
+    stats.push({
+      column,
+      count: values.length,
+      sum,
+      avg: sum / values.length,
+      min: Math.min(...values),
+      max: Math.max(...values),
+    });
+  }
+  return stats;
+}
+
+const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 });
+const fmt = (n) => numberFormat.format(n);
+
+function renderRow(record, meta) {
+  return `[${meta}] ${JSON.stringify(record)}`;
+}
+
+/**
+ * Picks the rows worth showing alongside the summary, and says how they were
+ * picked — the caller has to tell Claude the selection rule, or a "top 15 by
+ * deposits" list reads as "the whole file".
+ */
+function selectSample(entries, stats) {
+  if (entries.some((entry) => entry.rowDate)) {
+    const sorted = [...entries].sort((a, b) =>
+      String(b.rowDate ?? '').localeCompare(String(a.rowDate ?? '')),
+    );
+    return {
+      rows: sorted.slice(0, SAMPLE_ROW_LIMIT),
+      criterion: `เรียงตามวันที่ล่าสุด เอา ${SAMPLE_ROW_LIMIT} แถวล่าสุด`,
+      trustworthy: true,
+    };
+  }
+
+  const ranking = [...stats].sort((a, b) => b.sum - a.sum)[0];
+  if (ranking) {
+    const sorted = [...entries].sort(
+      (a, b) => (toNumber(b.record[ranking.column]) ?? -Infinity)
+        - (toNumber(a.record[ranking.column]) ?? -Infinity),
+    );
+    return {
+      rows: sorted.slice(0, SAMPLE_ROW_LIMIT),
+      criterion: `เรียงตาม \`${ranking.column}\` จากมากไปน้อย เอา ${SAMPLE_ROW_LIMIT} อันดับแรก`,
+      trustworthy: true,
+    };
+  }
+
+  // Nothing numeric survived the identifier filter, so there is no meaningful
+  // order to impose. Say so rather than implying these are the important rows.
+  return {
+    rows: entries.slice(0, SAMPLE_ROW_LIMIT),
+    criterion: `${SAMPLE_ROW_LIMIT} แถวแรกตามลำดับเดิม **ไม่ได้เรียงตามความสำคัญ**`,
+    trustworthy: false,
+  };
+}
+
+/**
+ * Turns the rows for a question into the text block Claude sees.
+ *
+ * Small files are sent whole. Large ones are not: `vip.xlsx` is 602 rows and
+ * dumping it cost ~183k input tokens for a single question, enough that the
+ * model spent its whole thinking budget on the dump and returned an empty
+ * answer. Those files become exact statistics over every row plus a labelled
+ * sample of real rows.
+ *
+ * The labelling is the load-bearing part. Without it the sample reads as the
+ * complete data and the model answers "who is ranked 20th?" confidently from
+ * fifteen rows it was handed.
+ *
+ * Exported for tests.
+ */
+export function formatContext({ site, fileType, availableMonths, rows }) {
+  const type = getFileType(fileType);
+  const header =
     `ประเภทไฟล์: ${type?.label ?? fileType} (${fileType})\n` +
     `เว็บ: ${siteDisplayName(site)}\n` +
-    `เดือนที่มีข้อมูล: ${availableMonths.join(', ')}\n` +
-    `จำนวนแถว: ${rows.length}\n\n` +
-    `${lines.join('\n')}`
+    `เดือนที่มีข้อมูล: ${availableMonths.join(', ')}\n`;
+
+  const entries = rows.map((r) => ({
+    record: { ...normaliseRow(r.row, site), ...deriveMetrics(r.row) },
+    rowDate: r.row_date,
+    meta: r.row_date ? `${r.year_month} ${r.row_date}` : r.year_month,
+  }));
+
+  if (rows.length <= DETAIL_ROW_LIMIT) {
+    const lines = entries.map((entry) => renderRow(entry.record, entry.meta));
+    return `${header}จำนวนแถว: ${rows.length}\n\n${lines.join('\n')}`;
+  }
+
+  const stats = numericColumnStats(entries.map((entry) => entry.record));
+  const sample = selectSample(entries, stats);
+
+  const summaryLines = stats.map(
+    (s) =>
+      `- ${s.column}: รวม ${fmt(s.sum)} | เฉลี่ย ${fmt(s.avg)} | ต่ำสุด ${fmt(s.min)} | ` +
+      `สูงสุด ${fmt(s.max)} | มีค่า ${s.count} แถว`,
   );
+
+  const summaryBlock =
+    `===== สรุปสถิติ — คำนวณจากข้อมูลจริงครบทั้ง ${rows.length} แถว =====\n` +
+    `ตัวเลขในบล็อกนี้ถูกต้อง 100% ใช้ตอบคำถามภาพรวมได้เต็มที่ ` +
+    `(ค่าเฉลี่ยคิดจากเฉพาะแถวที่มีค่าตัวเลข ตามจำนวนที่กำกับไว้ท้ายแต่ละบรรทัด)\n` +
+    (summaryLines.length > 0
+      ? summaryLines.join('\n')
+      : '(ไม่พบคอลัมน์ตัวเลขที่เป็น metric ในไฟล์นี้)');
+
+  const sampleBlock =
+    `===== ตัวอย่างข้อมูลรายแถว ${sample.rows.length} แถว จากทั้งหมด ${rows.length} แถว =====\n` +
+    `นี่คือ**ตัวอย่าง ไม่ใช่ข้อมูลครบ** — เกณฑ์การเลือก: ${sample.criterion}\n` +
+    sample.rows.map((entry) => renderRow(entry.record, entry.meta)).join('\n');
+
+  const hidden = rows.length - sample.rows.length;
+  const guardBlock =
+    `===== ข้อจำกัดของข้อมูลชุดนี้ (สำคัญ) =====\n` +
+    `ข้อมูลรายแถวที่ส่งมาให้มีแค่ ${sample.rows.length} แถวข้างบนเท่านั้น ` +
+    `อีก ${hidden} แถวไม่ได้ถูกส่งมาด้วย\n` +
+    `ห้ามตอบคำถามที่ต้องดูแถวรายตัวนอกเหนือจากตัวอย่างข้างบน ` +
+    `(เช่น "อันดับที่ 20 คือใคร", "username นี้มียอดเท่าไหร่", "ใครบ้างที่เข้าเงื่อนไข X") ` +
+    `เพราะข้อมูลส่วนนั้นไม่ได้ถูกส่งมา\n` +
+    `ถ้าถูกถามแบบนั้น ให้บอกตรง ๆ ว่าข้อมูลรายแถวส่วนนั้นไม่ได้ถูกส่งมา ` +
+    `แล้วแนะนำให้ถามให้เจาะจงขึ้น — ห้ามเดา ห้ามประมาณจากตัวอย่าง ` +
+    `และห้ามสรุปว่าตัวอย่างคือข้อมูลทั้งหมด`;
+
+  return `${header}จำนวนแถวทั้งหมด: ${rows.length}\n\n${summaryBlock}\n\n${sampleBlock}\n\n${guardBlock}`;
 }
 
 /**
