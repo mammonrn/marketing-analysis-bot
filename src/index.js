@@ -8,6 +8,7 @@ import { createBot, launchBot } from './telegram/bot.js';
 import { createRouter } from './miniapp/routes.js';
 import { initDataDb, closeDataDb } from './data/db.js';
 import { runMonthlyRetentionIfDue } from './data/retention.js';
+import { loadFxOverrides } from './data/fxRates.js';
 
 async function main() {
   // Fail fast and loudly if the skill bundle is incomplete — a bot answering
@@ -23,6 +24,9 @@ async function main() {
   pruneOldData();
 
   initDataDb();
+  // Before anything can convert money: without this a restart would silently
+  // revert every rate set from chat back to what shipped in config.
+  loadFxOverrides();
   runMonthlyRetentionIfDue();
 
   const app = express();

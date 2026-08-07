@@ -21,9 +21,87 @@ const ALIASES_PATH = path.join(ROOT, 'config', 'site-aliases.json');
 
 const raw = JSON.parse(fs.readFileSync(ALIASES_PATH, 'utf8'));
 
+/**
+ * `moneyFactor` used to be a single number in the JSON (787 for SH666), which
+ * silently fused two unrelated things: Power BI's own ×1,000 de-scaling, which
+ * is a property of the export and never changes, and the MMK→THB rate, which
+ * is a market figure that goes stale. Nothing recorded which half was which,
+ * or when the rate was taken.
+ *
+ * So the file now carries `scaleFactor`, `fxRate` and `fxRateAsOf` separately
+ * and the factor is derived here. Deliberately not stored: two numbers that
+ * must agree are two numbers that eventually will not.
+ *
+ * A site already in THB writes `fxRate: 1` rather than omitting it — an
+ * absent rate would be indistinguishable from a forgotten one, and `fxRate: 1`
+ * is what lets `formatContext` say "no currency conversion applies here"
+ * instead of staying silent.
+ */
+function describeSite(canonical, entry) {
+  const { scaleFactor, fxRate } = entry;
+
+  if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+    throw new Error(`site ${canonical}: scaleFactor must be a positive number`);
+  }
+  if (!Number.isFinite(fxRate) || fxRate <= 0) {
+    throw new Error(`site ${canonical}: fxRate must be a positive number`);
+  }
+
+  return {
+    canonical,
+    ...entry,
+    /** Derived, never stored: what `toThb` multiplies a file value by. */
+    moneyFactor: scaleFactor * fxRate,
+    /** True when the site's figures are already baht and only need de-scaling. */
+    needsFxConversion: fxRate !== 1,
+  };
+}
+
+/** The config baseline. Runtime rate overrides are layered on by `getSite`. */
 export const SITES = Object.fromEntries(
-  Object.entries(raw).map(([canonical, entry]) => [canonical, { canonical, ...entry }]),
+  Object.entries(raw).map(([canonical, entry]) => [canonical, describeSite(canonical, entry)]),
 );
+
+/**
+ * Rates changed from chat, layered over the config baseline.
+ *
+ * Kept here, in the module every consumer of a rate already goes through, so
+ * that `toThb`, `deriveMetrics` and the data-context header all pick a change
+ * up with no plumbing of their own. `fxRates.js` owns loading these from
+ * SQLite and writing them back; this module never imports the database —
+ * `transform.js` sits below `workbook.js` on the worker thread, and
+ * better-sqlite3 must never be loaded there.
+ *
+ * A consequence worth stating: the worker thread starts with an empty map. It
+ * never converts money — it only reads and reshapes rows — so this costs
+ * nothing today, but a future metric computed on the worker would silently use
+ * the config rate.
+ */
+const fxOverrides = new Map();
+
+/**
+ * Applied by `fxRates.js` at startup and after each confirmed change.
+ *
+ * The merged descriptor is built here, once per change, rather than on each
+ * lookup: `getSite` runs for every money column of every row, so a 600-row
+ * export asks thousands of times and rebuilding the object each time would be
+ * pure waste. Overrides change a handful of times a year.
+ */
+export function applyFxOverride(canonical, { fxRate, fxRateAsOf }) {
+  const base = SITES[canonical];
+  if (!base) throw new Error(`Unknown site: ${canonical}`);
+  fxOverrides.set(canonical, describeSite(canonical, { ...base, fxRate, fxRateAsOf }));
+}
+
+/** Drops every override, returning each site to its config values (tests). */
+export function clearFxOverrides() {
+  fxOverrides.clear();
+}
+
+/** Config plus any override — the values every caller should actually use. */
+function withOverride(site) {
+  return fxOverrides.get(site.canonical) ?? site;
+}
 
 export const ALL_SITE_KEYS = Object.keys(SITES);
 
@@ -37,12 +115,16 @@ function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Exact alias/canonical-key lookup (case-insensitive), e.g. from a folder path or a clean token. */
+/**
+ * Exact alias/canonical-key lookup (case-insensitive), e.g. from a folder path
+ * or a clean token. Returns the site with any runtime rate override already
+ * applied — this is the single point every money conversion passes through.
+ */
 export function getSite(input) {
   if (!input) return null;
   const needle = String(input).trim().toLowerCase();
   const hit = ALIAS_INDEX.find(({ alias }) => alias.toLowerCase() === needle);
-  return hit ? SITES[hit.canonical] : null;
+  return hit ? withOverride(SITES[hit.canonical]) : null;
 }
 
 /** Find a site mentioned anywhere in free text (a question, a caption, a filename). */

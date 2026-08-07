@@ -69,20 +69,24 @@ test('normaliseRow adds converted columns without losing the raw ones', () => {
 });
 
 test('deriveMetrics computes the metrics the skill says to always show', () => {
-  const out = deriveMetrics({
-    R: 100,
-    BIn: 400,
-    'BIn Mems': 400,
-    'BIn Mems (np)': 300,
-    '1 Time': 86,
-    '11~20 Counts': 37,
-    '21+ Counts': 188,
-    '1st Day Mems': 50,
-    '1st New Mems': 18,
-  });
+  const out = deriveMetrics(
+    {
+      R: 100,
+      BIn: 400,
+      'BIn Mems': 400,
+      'BIn Mems (np)': 300,
+      '1 Time': 86,
+      '11~20 Counts': 37,
+      '21+ Counts': 188,
+      '1st Day Mems': 50,
+      '1st New Mems': 18,
+    },
+    'shwe666',
+  );
 
   assert.equal(out['R/BIn_pct'], 25);
-  assert.equal(out.ARPPU, 1);
+  // 400 in the file is 400,000 MMK = ฿314,800 across 400 depositors.
+  assert.equal(out.ARPPU_THB, 787);
   assert.equal(out.organic_pct, 75);
   // Power User Index = (11~20 + 21+) / BIn Mems × 100
   assert.equal(Math.round(out.power_user_pct * 10) / 10, 56.3);
@@ -91,8 +95,80 @@ test('deriveMetrics computes the metrics the skill says to always show', () => {
   assert.equal(out.delayed_1st_deposit, 32);
 });
 
+test('ARPPU is baht per depositor, not raw file units', () => {
+  // The reported case: BIn 1000 over 50 depositors read as "20" when the
+  // answer is ฿15,740 — understated by the site's whole 787x factor, and
+  // silently, because ARPPU is not in the export to disagree with.
+  const row = { BIn: 1000, 'BIn Mems': 50 };
+
+  assert.equal(deriveMetrics(row, 'shwe666').ARPPU_THB, 15_740);
+  // A baht site keeps only the ×1,000 de-scaling.
+  assert.equal(deriveMetrics(row, 'ubet89').ARPPU_THB, 20_000);
+  // The old, unit-less name must be gone — two ARPPU columns of different
+  // magnitudes side by side is the ambiguity that caused this in the first place.
+  assert.equal('ARPPU' in deriveMetrics(row, 'shwe666'), false);
+});
+
+test('metrics whose units cancel are unaffected by the site', () => {
+  // R/BIn is money over money, so the factor divides out; the head-count
+  // ratios never touch money at all. All must agree across sites.
+  const row = {
+    R: 100,
+    BIn: 400,
+    'BIn Mems': 400,
+    'BIn Mems (np)': 300,
+    '1 Time': 86,
+    '1st Day Mems': 50,
+    '1st New Mems': 18,
+  };
+
+  const mmk = deriveMetrics(row, 'shwe666');
+  const thb = deriveMetrics(row, 'ubet89');
+
+  for (const key of ['R/BIn_pct', 'organic_pct', 'casual_pct', 'delayed_1st_deposit']) {
+    assert.equal(mmk[key], thb[key], `${key} must not depend on the site`);
+  }
+});
+
+test('the ad_agent / referrer money columns get converted companions too', () => {
+  // Same audit, one layer up: ad-agent.md and referrer.md mark all of these
+  // "THB (พัน)", but they were missing from MONEY_COLUMNS, so on those files
+  // they reached the model as bare MMK with no baht column beside them.
+  const row = { ARPPU: 12, Pw: -300, 'Ref Bonus': 45, 'Total Mems': 900 };
+  const out = normaliseRow(row, 'shwe666');
+
+  assert.equal(out.ARPPU_THB, 12 * 787);
+  assert.equal(out.Pw_THB, -300 * 787, 'a negative Pw converts too — players won that period');
+  assert.equal(out['Ref Bonus_THB'], 45 * 787);
+  // Head counts stay untouched, as before.
+  assert.equal(out['Total Mems'], 900);
+  assert.equal(out['Total Mems_THB'], undefined);
+});
+
+test("the export's own ARPPU column and the derived one never collide", () => {
+  // ad_agent/referrer carry `Total BIn Mems`, not the `BIn Mems` deriveMetrics
+  // needs, so only one of the two ever produces an ARPPU_THB for a given row.
+  const adAgent = { 'AD / Agent': 'line', BIn: 400, ARPPU: 12, 'Total BIn Mems': 33 };
+  assert.equal('ARPPU_THB' in deriveMetrics(adAgent, 'shwe666'), false);
+  assert.equal(normaliseRow(adAgent, 'shwe666').ARPPU_THB, 12 * 787);
+
+  const daily = { BIn: 1000, 'BIn Mems': 50 };
+  assert.equal(deriveMetrics(daily, 'shwe666').ARPPU_THB, 15_740);
+  assert.equal(normaliseRow(daily, 'shwe666').ARPPU_THB, undefined);
+});
+
 test('deriveMetrics omits metrics it cannot compute instead of emitting NaN', () => {
-  const out = deriveMetrics({ R: 100 });
+  const out = deriveMetrics({ R: 100 }, 'shwe666');
   assert.equal('R/BIn_pct' in out, false);
   assert.equal('delayed_1st_deposit' in out, false);
+});
+
+test('an unresolvable site omits ARPPU rather than guessing a factor', () => {
+  // Same rule the function already applies to a missing column: what cannot
+  // be computed is left out, never emitted at the wrong scale.
+  const row = { BIn: 1000, 'BIn Mems': 50 };
+  assert.equal('ARPPU_THB' in deriveMetrics(row, 'mystery'), false);
+  assert.equal('ARPPU_THB' in deriveMetrics(row), false);
+  // The metrics that need no site still come through.
+  assert.equal(deriveMetrics({ '1st Day Mems': 50, '1st New Mems': 18 }).delayed_1st_deposit, 32);
 });

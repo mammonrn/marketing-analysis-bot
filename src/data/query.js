@@ -7,7 +7,7 @@
  */
 
 import { getFileType, FILE_TYPES } from './fileTypes.js';
-import { siteDisplayName } from './sites.js';
+import { siteDisplayName, getSite } from './sites.js';
 import { normaliseRow, deriveMetrics, toNumber } from './transform.js';
 import { ensureParsed } from './parse.js';
 import { findRawFile, queryParsedRows, listRawFiles } from './db.js';
@@ -138,6 +138,90 @@ function renderRow(record, meta) {
 }
 
 /**
+ * States the site's currency and what the `_THB` suffix means.
+ *
+ * `normaliseRow` has always added a correct `BIn_THB` beside the raw `BIn`,
+ * and SH666's was right to the baht — but nothing ever told the model which
+ * of the two to quote. Worse, `SKILL.md` teaches the conversion as something
+ * the analyst performs (`df[col + "_THB"] = df[col] * FACTOR`), so from the
+ * model's side `_THB` reads as a column it is supposed to produce, not one it
+ * has been handed. Quoting the raw MMK figure as baht and multiplying the
+ * already-converted one a second time were both consistent with its
+ * instructions. This block is what makes them not.
+ *
+ * Every number comes from the site's own config entry, so a fourth site
+ * describes itself correctly the day it is added.
+ */
+function currencyGuidance(siteInput) {
+  const site = getSite(siteInput);
+  if (!site) return '';
+
+  const scale = fmt(site.scaleFactor);
+  const common =
+    `ให้อ้างอิงคอลัมน์ \`_THB\` เสมอเมื่อพูดถึงจำนวนเงิน ห้ามนำไปคูณซ้ำอีก\n` +
+    `คอลัมน์ดิบที่ไม่มี \`_THB\` คือค่าตามที่ปรากฏในไฟล์ต้นฉบับ ` +
+    `ใช้เมื่อต้อง cross-check กับ Power BI เท่านั้น ห้ามรายงานเป็นจำนวนเงิน\n`;
+
+  // A THB site must not be told about an exchange rate it does not have —
+  // "× 1" would read as a conversion that happened. The ×1,000 de-scaling
+  // still applies, so `_THB` is still the column to quote.
+  if (!site.needsFxConversion) {
+    return (
+      `สกุลเงินต้นทาง: ${site.currency} — เป็นเงินบาทอยู่แล้ว ไม่มีการแปลงสกุลเงิน\n` +
+      `จำนวนเงินในไฟล์ถูกตัด 3 ศูนย์ไว้ คอลัมน์ที่ลงท้าย \`_THB\` คือค่าที่คูณ ${scale} กลับคืนแล้ว\n` +
+      common
+    );
+  }
+
+  return (
+    `สกุลเงินต้นทาง: ${site.currency} (จำนวนเงินในไฟล์ถูกตัด 3 ศูนย์ไว้)\n` +
+    `คอลัมน์ที่ลงท้าย \`_THB\` คือค่าที่แปลงเป็นเงินบาทเรียบร้อยแล้ว ` +
+    `(× ${scale} × ${site.fxRate} — rate ณ ${site.fxRateAsOf})\n` +
+    common
+  );
+}
+
+/**
+ * `BIn_THB` immediately before `BIn`, so the baht figure is the one read
+ * first, and each line says which unit it is in.
+ *
+ * `normaliseRow` appends the converted columns after every original one, so
+ * left alone the summary listed all the raw MMK figures first and the baht
+ * ones far below — exactly the wrong way round for a model skimming for a
+ * number to quote.
+ *
+ * Display order only. The ranking that picks the sample sorts its own copy by
+ * sum, and is deliberately left alone.
+ */
+function orderStatsForReading(stats) {
+  const byColumn = new Map(stats.map((stat) => [stat.column, stat]));
+  const out = [];
+  const placed = new Set();
+
+  const place = (stat, unit) => {
+    if (placed.has(stat.column)) return;
+    placed.add(stat.column);
+    out.push({ ...stat, unit });
+  };
+
+  for (const stat of stats) {
+    if (placed.has(stat.column)) continue;
+    if (stat.column.endsWith('_THB')) {
+      place(stat, 'บาท');
+      continue;
+    }
+    const converted = byColumn.get(`${stat.column}_THB`);
+    if (converted) {
+      place(converted, 'บาท');
+      place(stat, 'ค่าดิบตามไฟล์ ยังไม่แปลงเป็นบาท');
+    } else {
+      place(stat, null);
+    }
+  }
+  return out;
+}
+
+/**
  * Picks the rows worth showing alongside the summary, and says how they were
  * picked — the caller has to tell Claude the selection rule, or a "top 15 by
  * deposits" list reads as "the whole file".
@@ -196,10 +280,13 @@ export function formatContext({ site, fileType, availableMonths, rows }) {
   const header =
     `ประเภทไฟล์: ${type?.label ?? fileType} (${fileType})\n` +
     `เว็บ: ${siteDisplayName(site)}\n` +
-    `เดือนที่มีข้อมูล: ${availableMonths.join(', ')}\n`;
+    `เดือนที่มีข้อมูล: ${availableMonths.join(', ')}\n` +
+    // On both paths, small file and large: the ambiguity it resolves is in the
+    // rows themselves, which are present either way.
+    currencyGuidance(site);
 
   const entries = rows.map((r) => ({
-    record: { ...normaliseRow(r.row, site), ...deriveMetrics(r.row) },
+    record: { ...normaliseRow(r.row, site), ...deriveMetrics(r.row, site) },
     rowDate: r.row_date,
     meta: r.row_date ? `${r.year_month} ${r.row_date}` : r.year_month,
   }));
@@ -212,10 +299,13 @@ export function formatContext({ site, fileType, availableMonths, rows }) {
   const stats = numericColumnStats(entries.map((entry) => entry.record));
   const sample = selectSample(entries, stats);
 
-  const summaryLines = stats.map(
+  // The unit note goes at the end of the line, leaving the `- <column>:` head
+  // exactly as it was — that prefix is what a reader (and the tests) key off.
+  const summaryLines = orderStatsForReading(stats).map(
     (s) =>
       `- ${s.column}: รวม ${fmt(s.sum)} | เฉลี่ย ${fmt(s.avg)} | ต่ำสุด ${fmt(s.min)} | ` +
-      `สูงสุด ${fmt(s.max)} | มีค่า ${s.count} แถว`,
+      `สูงสุด ${fmt(s.max)} | มีค่า ${s.count} แถว` +
+      (s.unit ? ` — หน่วย: ${s.unit}` : ''),
   );
 
   const summaryBlock =

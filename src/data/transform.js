@@ -87,6 +87,17 @@ export function formatPercent(value, decimals = 1) {
 const MONEY_COLUMNS = new Set([
   'CIn', 'Nw', 'Nw (np)', 'Nw (p)', 'BIn', 'Bo', 'R', 'BIn (P)', 'Pro', 'Pass', 'Pro R', 'Bonus',
   'Manual', 'Med. BIn', '1st New (BIn)', '1st Day (BIn)',
+  // Found while auditing `deriveMetrics` for unit errors: ad-agent.md,
+  // referrer.md and member-detail.md all mark these "THB (พัน)", so they are
+  // money on exactly the same footing as BIn — but they were absent here, so
+  // on the ad_agent and referrer files they reached the model as bare local
+  // currency with no converted companion at all.
+  //
+  // `ARPPU` here is the export's own column (BIn / Total BIn Mems, computed
+  // upstream by Power BI), not the one `deriveMetrics` derives. They never
+  // collide: the files that carry this column have `Total BIn Mems` rather
+  // than the `BIn Mems` that `deriveMetrics` requires.
+  'ARPPU', 'Pw', 'Ref Bonus',
 ]);
 
 const PERCENT_COLUMNS = new Set([
@@ -117,10 +128,33 @@ export function normaliseRow(row, siteInput) {
  * new-member-quality "delayed 1st deposit" gap). Only emitted when every
  * input column it needs is actually present — a metric the row can't support
  * is omitted, never sent out as NaN.
+ *
+ * `siteInput` is required for any metric whose result is an amount of money.
+ * Every metric here was audited for its unit, and they fall into three groups:
+ *
+ * - **Ratios of two money columns** (`R/BIn_pct`) — the site factor appears in
+ *   both halves and cancels, so they were and remain correct without a site.
+ * - **Ratios of two head counts** (`organic_pct`, `casual_pct`,
+ *   `power_user_pct`) and **differences of head counts**
+ *   (`delayed_1st_deposit`) — no money involved at all.
+ * - **Money divided by a head count** — the result is money, so it has to be
+ *   converted. `ARPPU` was the only one, and it was wrong: computed from the
+ *   raw `BIn`, it reported SH666 as 20 where the truth is ฿15,740, understating
+ *   by the site's whole 787x factor. It is now `ARPPU_THB`, computed from the
+ *   converted figure.
+ *
+ * The rename is the point, not incidental. A bare `ARPPU` alongside `BIn` and
+ * `BIn_THB` is exactly the ambiguity that caused the original bug, and this one
+ * failed silently: unlike `BIn`, ARPPU is not in the export, so there was no
+ * Power BI figure to notice it disagreed with.
+ *
+ * A site that cannot be resolved omits `ARPPU_THB` rather than guessing a
+ * factor — the same rule this function already applies to a missing column.
  */
-export function deriveMetrics(row) {
+export function deriveMetrics(row, siteInput) {
   const out = {};
   const get = (key) => (key in row ? toNumber(row[key]) : null);
+  const site = getSite(siteInput);
 
   const R = get('R');
   const BIn = get('BIn');
@@ -132,8 +166,12 @@ export function deriveMetrics(row) {
   const firstDayMems = get('1st Day Mems');
   const firstNewMems = get('1st New Mems');
 
+  // Money over money: the site factor cancels, so this one needs no site.
   if (R !== null && BIn) out['R/BIn_pct'] = roundTo((R / BIn) * 100, 6);
-  if (BIn !== null && binMems) out.ARPPU = roundTo(BIn / binMems, 6);
+  // Money over people: the result is money and must be in baht.
+  if (BIn !== null && binMems && site) {
+    out.ARPPU_THB = roundTo((BIn * site.moneyFactor) / binMems, 6);
+  }
   if (binMemsNp !== null && binMems) out.organic_pct = roundTo((binMemsNp / binMems) * 100, 6);
   if (oneTime !== null && binMems) out.casual_pct = roundTo((oneTime / binMems) * 100, 6);
   if (t1120 !== null && t21plus !== null && binMems) {

@@ -19,6 +19,7 @@ process.env.ANTHROPIC_API_KEY ??= 'test-key';
 
 const { formatContext } = await import('../src/data/query.js');
 const { normaliseRow, deriveMetrics } = await import('../src/data/transform.js');
+const { SITES } = await import('../src/data/sites.js');
 
 /** Shapes a parsed_rows row the way queryParsedRows hands it over. */
 function dbRow(record, { rowDate = null, yearMonth = '2026-07' } = {}) {
@@ -208,6 +209,70 @@ test('with every numeric column filtered out, the sample says it is unordered', 
   assert.deepEqual(names.slice(0, 3), ['u0', 'u1', 'u2'], 'falls back to original order');
 });
 
+// --- currency guidance ------------------------------------------------------
+
+test('the header states the source currency and what _THB already means', () => {
+  const rows = [dbRow({ Date: '2026-07-01', BIn: 1000 }, { rowDate: '2026-07-01' })];
+  const text = context(rows, { fileType: 'daily_value', site: 'shwe666' });
+
+  assert.match(text, /สกุลเงินต้นทาง: MMK/);
+  assert.match(text, /ค่าที่แปลงเป็นเงินบาทเรียบร้อยแล้ว/);
+  // The instruction that stops the raw MMK figure being quoted as baht, and
+  // the one that stops the converted figure being multiplied a second time.
+  assert.match(text, /ให้อ้างอิงคอลัมน์ `_THB` เสมอ/);
+  assert.match(text, /ห้ามนำไปคูณซ้ำอีก/);
+  assert.match(text, /cross-check/);
+});
+
+test('the rate in the header comes from config, not a hardcoded string', () => {
+  const site = SITES.shwe666;
+
+  const rows = [dbRow({ Date: '2026-07-01', BIn: 1000 }, { rowDate: '2026-07-01' })];
+  const text = context(rows, { fileType: 'daily_value', site: 'shwe666' });
+
+  assert.ok(
+    text.includes(`× 1,000 × ${site.fxRate} — rate ณ ${site.fxRateAsOf}`),
+    `header must quote the configured rate ${site.fxRate} as of ${site.fxRateAsOf}`,
+  );
+  // And the figure in the rows agrees with what the header claims.
+  assert.ok(text.includes(`"BIn_THB":${1000 * site.scaleFactor * site.fxRate}`));
+});
+
+test('a THB site is not told about an exchange rate it does not have', () => {
+  const rows = [dbRow({ Date: '2026-07-01', BIn: 1000 }, { rowDate: '2026-07-01' })];
+  const text = context(rows, { fileType: 'daily_value', site: 'ubet89' });
+
+  assert.match(text, /สกุลเงินต้นทาง: THB/);
+  assert.match(text, /ไม่มีการแปลงสกุลเงิน/);
+  // "× 1" would read as a conversion that happened, and a rate date would
+  // imply a rate that can go stale. Neither belongs here.
+  assert.ok(!/× 1 —/.test(text), 'no phantom ×1 conversion');
+  assert.ok(!/rate ณ/.test(text), 'no exchange-rate date for a baht site');
+  // But _THB is still the column to quote, because the ×1,000 still applies.
+  assert.match(text, /ให้อ้างอิงคอลัมน์ `_THB` เสมอ/);
+  assert.ok(text.includes('"BIn_THB":1000000'));
+});
+
+test('in the stats block the converted column leads its raw twin, both labelled', () => {
+  const rows = Array.from({ length: 45 }, (_, i) =>
+    dbRow({ Username: `u${i}`, BIn: 1000 + (i % 7), DAU: 470 }),
+  );
+
+  const text = context(rows, { site: 'shwe666' });
+  const lines = text.split('\n').filter((l) => l.startsWith('- '));
+
+  const thbAt = lines.findIndex((l) => l.startsWith('- BIn_THB:'));
+  const rawAt = lines.findIndex((l) => l.startsWith('- BIn:'));
+  assert.ok(thbAt >= 0 && rawAt >= 0, 'both columns must be summarised');
+  assert.ok(thbAt < rawAt, 'the baht figure must be the one read first');
+
+  assert.match(lines[thbAt], /หน่วย: บาท$/);
+  assert.match(lines[rawAt], /หน่วย: ค่าดิบตามไฟล์ ยังไม่แปลงเป็นบาท$/);
+  // A head count has no currency unit and must not be given one.
+  const dau = lines.find((l) => l.startsWith('- DAU:'));
+  assert.ok(dau && !dau.includes('หน่วย:'), 'DAU is people, not money');
+});
+
 // --- the 40-row boundary ----------------------------------------------------
 
 test('40 rows keeps the original verbatim format exactly', () => {
@@ -222,7 +287,7 @@ test('40 rows keeps the original verbatim format exactly', () => {
   // pins "unchanged" rather than just "looks similar".
   const expected = rows.map(
     (r) =>
-      `[2026-07] ${JSON.stringify({ ...normaliseRow(r.row, 'shwe666'), ...deriveMetrics(r.row) })}`,
+      `[2026-07] ${JSON.stringify({ ...normaliseRow(r.row, 'shwe666'), ...deriveMetrics(r.row, 'shwe666') })}`,
   );
   const lines = text.trim().split('\n').filter((l) => l.startsWith('['));
   assert.deepEqual(lines, expected);
