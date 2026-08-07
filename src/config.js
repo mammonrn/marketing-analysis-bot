@@ -45,6 +45,9 @@ export const config = {
     apiKey: required('ANTHROPIC_API_KEY'),
     model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
     maxTokens: int('ANTHROPIC_MAX_TOKENS', 4096),
+    // '5m' (default) or '1h' — see `userMessage` in src/claude/client.js for
+    // why 5m is the conservative starting point and what evidence justifies 1h.
+    cacheTtl: (process.env.ANTHROPIC_CACHE_TTL || '5m').toLowerCase(),
   },
 
   http: {
