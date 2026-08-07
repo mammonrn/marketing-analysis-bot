@@ -92,6 +92,29 @@ export const FILE_TYPES = [
     aggregate: aggregateBonusLog,
     signature: (headers) => headers.has('Memo') && headers.has('Lv') && headers.has('Points'),
   },
+  // `reward point.xlsx` and `other transfer.xlsx` are the same point-log shape
+  // as `bonus.xlsx` (AddTime / Type / Username / Lv / Points / Memo), so they
+  // match the signature above and all three used to share one storage key —
+  // uploading two of them in a month kept only the last. They are separate
+  // reports: casino-metrics.md documents the Type vocabulary of reward point,
+  // and fraud-anomaly-detection.md reads other transfer for manual credit.
+  // Same aggregation, same date column; only the identity differs.
+  {
+    id: 'reward_point',
+    label: 'Reward / Loyalty Point Log (สรุปรายวัน)',
+    referenceFile: 'casino-metrics.md',
+    dateColumn: 'Date',
+    sourceDateColumn: 'AddTime',
+    aggregate: aggregateBonusLog,
+  },
+  {
+    id: 'other_transfer',
+    label: 'Other Transfer / Manual Credit (สรุปรายวัน)',
+    referenceFile: 'fraud-anomaly-detection.md',
+    dateColumn: 'Date',
+    sourceDateColumn: 'AddTime',
+    aggregate: aggregateBonusLog,
+  },
   {
     id: 'ad_agent',
     label: 'AD / Agent',
@@ -109,6 +132,19 @@ export const FILE_TYPES = [
     // Leading column is the referrer's username.
     leadColumnIsUserText: true,
     signature: (headers) => headers.has('Ref Bonus'),
+  },
+  {
+    id: 'member_referrer_detail',
+    label: 'Member Referrer Detail',
+    referenceFile: 'fraud-anomaly-detection.md',
+    dateColumn: null,
+    leadColumnIsUserText: true,
+    // No signature: its columns are member_detail's (Username, Referrer, BIn,
+    // Pro, R, BIn Days — u89-metrics.md and fraud-anomaly-detection.md), so the
+    // header row cannot tell the two apart. The filename can, and must:
+    // fraud-anomaly-detection.md calls for this file by name to find referral
+    // abuse, and while both landed on `member_detail` the second upload of the
+    // month silently replaced the first.
   },
   {
     id: 'member_detail',
@@ -180,6 +216,51 @@ export function isHourPivotHeader(headers) {
  */
 export function resolvePivotFileType(originalFilename) {
   return /mems/i.test(String(originalFilename ?? '')) ? 'avg_bin_mems_by_hour' : 'avg_bin_by_hour';
+}
+
+/**
+ * Exports that a signature matches but that are not the report it names.
+ *
+ * Two families share a header shape with a type that has a signature, so
+ * `detectFileType` hands all of them the same id — and since `raw_files` is
+ * unique on (site, year_month, file_type), the second upload of a month
+ * replaced the first on disk and in the database. Nothing errored; the file
+ * just stopped existing. That is how `Member Referrer Detail.xlsx` came back
+ * labelled "Member Detail" and `reward point.xlsx` came back as "Bonus /
+ * Points Log": not a misreading of the columns, but two different reports
+ * sharing one slot.
+ *
+ * It matters beyond the label. `fraud-anomaly-detection.md` is a required
+ * part of the system prompt and calls for `Member Referrer Detail.xlsx`,
+ * `reward point.xlsx` and `other transfer.xlsx` by name; the referral-abuse
+ * and manual-credit checks cannot run on files that overwrite each other.
+ *
+ * Filename is the only thing left to separate them, which is the same
+ * position the two hour pivots are in and is resolved the same way. Order
+ * matters: `member referrer detail` has to be tested before any looser
+ * `member` rule would catch it.
+ */
+const FILENAME_OVERRIDES = [
+  { pattern: /member\s*referrer\s*detail/i, from: ['member_detail'], to: 'member_referrer_detail' },
+  { pattern: /reward\s*point/i, from: ['bonus_log'], to: 'reward_point' },
+  { pattern: /other\s*transfer/i, from: ['bonus_log'], to: 'other_transfer' },
+];
+
+/**
+ * Refines a signature match using the filename, or returns it unchanged.
+ *
+ * Deliberately narrow: an override only fires when the signature already
+ * produced the type it is registered against, so a filename can redirect a
+ * `member_detail` match but can never invent a type for a file whose columns
+ * say something else entirely.
+ */
+export function refineFileTypeByFilename(fileType, originalFilename) {
+  if (!fileType) return fileType;
+  const name = String(originalFilename ?? '');
+  const hit = FILENAME_OVERRIDES.find(
+    (override) => override.from.includes(fileType) && override.pattern.test(name),
+  );
+  return hit ? hit.to : fileType;
 }
 
 export function getFileType(id) {

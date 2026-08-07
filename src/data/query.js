@@ -6,7 +6,7 @@
  * any that haven't been yet, and formats the rows for `claude/client.js`.
  */
 
-import { getFileType, FILE_TYPES } from './fileTypes.js';
+import { getFileType, FILE_TYPES, FILE_TYPE_IDS } from './fileTypes.js';
 import { siteDisplayName, getSite } from './sites.js';
 import { normaliseRow, deriveMetrics, toNumber } from './transform.js';
 import { thresholdGroupsFor, countByThresholds } from './thresholds.js';
@@ -90,6 +90,45 @@ const ROUTES = [
       /ค่ายเกม/,
       /เกมไหน/,
     ],
+  },
+  // The types below had no route at all, which is why "referrer คนไหนสร้าง
+  // มูลค่าจริง" scored as `daily_value`. Harmless now that a miss only affects
+  // ordering, but the ordering is still worth getting right.
+  {
+    fileType: 'referrer',
+    patterns: [/referrer/i, /ผู้แนะนำ/, /ชวนเพื่อน/, /แนะนำเพื่อน/, /referral/i, /commission/i, /ค่าคอม/],
+  },
+  {
+    fileType: 'member_referrer_detail',
+    patterns: [/member referrer/i, /downline/i, /ลูกทีม/, /คนที่ถูกแนะนำ/],
+  },
+  {
+    fileType: 'ad_agent',
+    patterns: [/\bagent\b/i, /\bad\b.*agent/i, /ช่องทางโฆษณา/, /เอเย่นต์/, /ตัวแทน/],
+  },
+  {
+    fileType: 'member_detail',
+    patterns: [/member detail/i, /รายชื่อ.*member/i, /prefer game/i, /เกมที่ชอบ/],
+  },
+  {
+    fileType: 'bonus_log',
+    patterns: [/\bbonus\b/i, /โบนัส/, /loyalty point/i, /cashback/i, /ค่าน้ำ/],
+  },
+  {
+    fileType: 'reward_point',
+    patterns: [/reward point/i, /รีวอร์ด/, /แต้มสะสม/],
+  },
+  {
+    fileType: 'other_transfer',
+    patterns: [/other transfer/i, /manual credit/i, /เติมเครดิตมือ/, /คืนยอดเสีย/, /โอนพิเศษ/],
+  },
+  {
+    fileType: 'deposit_detail',
+    patterns: [/payname/i, /ช่องทางฝาก/, /ช่องทางการฝาก/, /ธนาคาร/, /deposit detail/i, /รายการฝาก/],
+  },
+  {
+    fileType: 'avg_bin_by_hour',
+    patterns: [/ชั่วโมง/, /ช่วงเวลา/, /peak/i, /by hour/i, /เวลาไหน/, /ยิงแอดตอนไหน/],
   },
 ];
 
@@ -528,38 +567,182 @@ export function formatContext({ site, fileType, availableMonths, rows }) {
 }
 
 /**
- * Returns the formatted data block for a question, or `null` when nothing is
- * uploaded yet for that site/file-type — the caller (spec §6/§3B layer 2)
- * turns `null` into "ยังไม่มีข้อมูลนี้ ขอให้ upload เพิ่ม" rather than guessing.
+ * A generous runaway guard, not a budget.
+ *
+ * Measured with `scripts/measure-context.mjs`: every one of the twelve file
+ * types, each at a full month's rows, comes to ~102k characters (~32k tokens),
+ * on top of a ~27k-token cached system prompt. That fits a 200k window several
+ * times over, so nothing is dropped in practice and this ceiling exists only so
+ * an unforeseen export — a file type with far more rows than any seen — cannot
+ * silently produce a context that costs a fortune or fails the call.
+ *
+ * When it does bite, the least relevant files are the ones left out and the
+ * inventory says so by name. Lowering it to impose a real budget is a one-line
+ * change; the "present but not sent" path below is built and tested either way.
+ */
+const CONTEXT_CHAR_BUDGET = 400_000;
+
+/**
+ * File types in the order they should be offered to the model.
+ *
+ * `pickFileType`'s keyword match is kept, demoted from gatekeeper to sort key.
+ * As a gatekeeper it was the source of three separate bugs — a question it did
+ * not recognise got the wrong report and the model said the file was missing.
+ * As a sort key a miss costs nothing: every file is present regardless, the
+ * keyword only decides which one leads. It still earns its place, because
+ * leading with the report the question is about is worth more than leaving the
+ * order to the manifest.
+ */
+function relevanceOrder(question, fileTypes) {
+  const preferred = pickFileType(question);
+  return [...fileTypes].sort((a, b) => {
+    if (a === preferred) return -1;
+    if (b === preferred) return 1;
+    return FILE_TYPE_IDS.indexOf(a) - FILE_TYPE_IDS.indexOf(b);
+  });
+}
+
+/**
+ * The list of everything the bot holds for this site, and what happened to
+ * each entry in this call.
+ *
+ * Required in every context, including the one where nothing could be sent.
+ * The reported failure was the bot answering "ไฟล์นี้ยังไม่ถูกอัปโหลด" about a
+ * file sitting in the database — because the context it was handed contained
+ * no trace of that file, and from where the model sat, absent and non-existent
+ * are the same thing. With this block they are not: it can say the data was
+ * not included in this round, which is true and actionable, instead of that
+ * the file was never uploaded, which is false and sends someone re-uploading.
+ */
+function inventoryBlock(site, entries) {
+  const lines = entries.map((entry) => {
+    const months = entry.availableMonths.join(', ');
+    if (entry.included) return `  ✅ ${entry.label} (${entry.fileType}) — เดือน ${months} — ส่งข้อมูลมาด้วยแล้ว`;
+    return (
+      `  ⬜ ${entry.label} (${entry.fileType}) — เดือน ${months} — ` +
+      `**มีไฟล์นี้อยู่ในระบบ แต่ข้อมูลไม่ได้ถูกส่งมาในรอบนี้** (${entry.reason})`
+    );
+  });
+
+  return (
+    `===== ไฟล์ทั้งหมดที่มีอยู่ในระบบของ ${siteDisplayName(site)} =====\n` +
+    (lines.length > 0 ? lines.join('\n') : '  (ยังไม่มีไฟล์ใดถูกอัปโหลดสำหรับเว็บนี้)') +
+    `\n\nรายการข้างบนคือความจริงเรื่อง "มีไฟล์อะไรบ้าง" — ใช้รายการนี้ตอบเสมอ\n` +
+    `ถ้าถูกถามถึงไฟล์ที่ขึ้น ⬜ ให้ตอบว่า **มีไฟล์นั้นอยู่ในระบบแล้ว แต่ข้อมูลไม่ได้ถูกส่งมาในรอบนี้** ` +
+    `แล้วให้ผู้ใช้ถามเจาะจงไฟล์นั้นอีกครั้ง — ` +
+    `**ห้ามตอบว่ายังไม่ได้อัปโหลด** เพราะไฟล์นั้นถูกอัปโหลดมาแล้ว\n` +
+    `ถ้าไฟล์ที่ต้องใช้ไม่มีอยู่ในรายการนี้เลย นั่นคือยังไม่ได้อัปโหลดจริง ให้บอกให้อัปโหลดเพิ่ม`
+  );
+}
+
+/**
+ * Every file the bot holds for this site, formatted for one question.
+ *
+ * Was: pick one file type from the question's keywords and send only that.
+ * That could not answer anything spanning two reports — "ตรวจสอบการแจก bonus
+ * และ commission โปรแนะนำเพื่อน" needs referrer, member_detail and bonus_log at
+ * once — and when the keywords missed, the single file it did send was the
+ * wrong one. Sending everything makes both failures impossible.
+ *
+ * What made it affordable is PR #8: a file that used to cost ~92k tokens as a
+ * raw dump now costs ~3k as a summary block, so all twelve together cost less
+ * than one file did before.
+ *
+ * Returns `null` only when the site has no files at all — the caller turns that
+ * into "ยังไม่มีข้อมูล ขอให้ upload". Any file present means a context, even if
+ * its rows could not be read.
  */
 export async function buildDataContext(site, question, { monthsBack = 3, onProgress } = {}) {
-  const fileType = pickFileType(question);
   const candidateMonths = lastNYearMonths(monthsBack);
-  const availableMonths = candidateMonths.filter((ym) => findRawFile({ site, yearMonth: ym, fileType }));
 
-  if (availableMonths.length === 0) return null;
+  // What exists, per type, within the comparison window.
+  const present = FILE_TYPE_IDS.map((fileType) => ({
+    fileType,
+    label: getFileType(fileType)?.label ?? fileType,
+    availableMonths: candidateMonths.filter((ym) => findRawFile({ site, yearMonth: ym, fileType })),
+  })).filter((entry) => entry.availableMonths.length > 0);
 
-  for (const yearMonth of availableMonths) {
-    try {
-      // The first question after a big upload is the one that pays for
-      // parsing it, so progress has to reach the asker here too.
-      await ensureParsed({
-        site,
-        yearMonth,
-        fileType,
-        onProgress: onProgress
-          ? (update) => onProgress({ ...update, label: getFileType(fileType)?.label ?? fileType })
-          : undefined,
-      });
-    } catch (err) {
-      logger.error('failed to parse raw file on demand', { site, yearMonth, fileType, message: err?.message });
+  if (present.length === 0) return null;
+
+  const ordered = relevanceOrder(
+    question,
+    present.map((entry) => entry.fileType),
+  );
+  const byType = new Map(present.map((entry) => [entry.fileType, entry]));
+
+  const entries = [];
+  const blocks = [];
+  let usedChars = 0;
+
+  for (const fileType of ordered) {
+    const entry = byType.get(fileType);
+    const label = entry.label;
+
+    for (const yearMonth of entry.availableMonths) {
+      try {
+        // The first question after a big upload is the one that pays for
+        // parsing it, so progress has to reach the asker here too.
+        await ensureParsed({
+          site,
+          yearMonth,
+          fileType,
+          onProgress: onProgress ? (update) => onProgress({ ...update, label }) : undefined,
+        });
+      } catch (err) {
+        logger.error('failed to parse raw file on demand', {
+          site,
+          yearMonth,
+          fileType,
+          message: err?.message,
+        });
+      }
     }
+
+    const rows = queryParsedRows({ site, fileType, yearMonths: entry.availableMonths });
+    if (rows.length === 0) {
+      // The file is there but produced nothing readable. Still listed, because
+      // "uploaded but unreadable" is a different thing to tell the user than
+      // "never uploaded", and only the inventory can carry that distinction.
+      entries.push({ ...entry, included: false, reason: 'อ่านข้อมูลจากไฟล์ไม่ได้' });
+      continue;
+    }
+
+    const block = formatContext({ site, fileType, availableMonths: entry.availableMonths, rows });
+
+    if (usedChars + block.length > CONTEXT_CHAR_BUDGET && blocks.length > 0) {
+      entries.push({ ...entry, included: false, reason: 'context เต็มงบในรอบนี้' });
+      continue;
+    }
+
+    usedChars += block.length;
+    blocks.push(block);
+    entries.push({ ...entry, included: true });
   }
 
-  const rows = queryParsedRows({ site, fileType, yearMonths: availableMonths });
-  if (rows.length === 0) return null;
+  // Inventory first: it is the shortest block and the one that must survive
+  // being skimmed, and it frames everything after it.
+  const inventory = inventoryBlock(site, entries);
 
-  return formatContext({ site, fileType, availableMonths, rows });
+  logger.info('built data context', {
+    site,
+    types: entries.length,
+    included: entries.filter((e) => e.included).length,
+    chars: usedChars,
+  });
+
+  if (blocks.length === 0) return inventory;
+
+  const separated = blocks
+    .map((block, i) => `########## ไฟล์ที่ ${i + 1} จาก ${blocks.length} ##########\n${block}`)
+    .join('\n\n');
+
+  return (
+    `${inventory}\n\n` +
+    `หมายเหตุ: ด้านล่างนี้มีข้อมูลหลายไฟล์ต่อกัน แต่ละไฟล์คั่นด้วยบรรทัด ####### ` +
+    `แต่ละบล็อกมีหัวบอกชัดว่าเป็นไฟล์ประเภทไหน ` +
+    `**ห้ามเอาตัวเลขข้ามไฟล์มาปนกัน** — ถ้าจะอ้างตัวเลขใด ให้ดูว่ามาจากบล็อกไหน\n\n` +
+    separated
+  );
 }
 
 /** Per-file-type inventory for a site — used by `/status`. */

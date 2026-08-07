@@ -14,6 +14,7 @@
     "check:skill": "node scripts/check-skill.mjs",
     "check:sitekeys": "node scripts/check-site-keys.mjs",
     "check:rows": "node scripts/check-dropped-rows.mjs",
+    "measure:context": "node scripts/measure-context.mjs",
     "smoke": "node scripts/smoke-miniapp.mjs",
     "sync:skill": "bash scripts/sync-skill.sh",
     "test": "node --test test/*.test.js"
