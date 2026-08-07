@@ -286,7 +286,7 @@ export function formatContext({ site, fileType, availableMonths, rows }) {
     currencyGuidance(site);
 
   const entries = rows.map((r) => ({
-    record: { ...normaliseRow(r.row, site), ...deriveMetrics(r.row) },
+    record: { ...normaliseRow(r.row, site), ...deriveMetrics(r.row, site) },
     rowDate: r.row_date,
     meta: r.row_date ? `${r.year_month} ${r.row_date}` : r.year_month,
   }));

@@ -287,7 +287,7 @@ test('40 rows keeps the original verbatim format exactly', () => {
   // pins "unchanged" rather than just "looks similar".
   const expected = rows.map(
     (r) =>
-      `[2026-07] ${JSON.stringify({ ...normaliseRow(r.row, 'shwe666'), ...deriveMetrics(r.row) })}`,
+      `[2026-07] ${JSON.stringify({ ...normaliseRow(r.row, 'shwe666'), ...deriveMetrics(r.row, 'shwe666') })}`,
   );
   const lines = text.trim().split('\n').filter((l) => l.startsWith('['));
   assert.deepEqual(lines, expected);
