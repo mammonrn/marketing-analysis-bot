@@ -583,23 +583,43 @@ export function formatContext({ site, fileType, availableMonths, rows }) {
 const CONTEXT_CHAR_BUDGET = 400_000;
 
 /**
- * File types in the order they should be offered to the model.
+ * File types in the order they are written into the context: manifest order,
+ * always, independent of the question.
  *
- * `pickFileType`'s keyword match is kept, demoted from gatekeeper to sort key.
- * As a gatekeeper it was the source of three separate bugs — a question it did
- * not recognise got the wrong report and the model said the file was missing.
- * As a sort key a miss costs nothing: every file is present regardless, the
- * keyword only decides which one leads. It still earns its place, because
- * leading with the report the question is about is worth more than leaving the
- * order to the manifest.
+ * This used to sort the question's keyword match to the front. That was a real
+ * improvement to how the context reads — and it made the whole block
+ * uncacheable, because the bytes then depended on the question. Two questions
+ * against the same site and month produced two different prefixes and every
+ * request paid full price for ~36k tokens of identical data.
+ *
+ * The relevance signal is not lost, only moved: `relevanceHint` below produces
+ * a one-line pointer that the caller places *after* the cache breakpoint,
+ * alongside the question. Same guidance to the model, none of the cache cost —
+ * a stable prefix is worth far more than the ordering was.
  */
-function relevanceOrder(question, fileTypes) {
-  const preferred = pickFileType(question);
-  return [...fileTypes].sort((a, b) => {
-    if (a === preferred) return -1;
-    if (b === preferred) return 1;
-    return FILE_TYPE_IDS.indexOf(a) - FILE_TYPE_IDS.indexOf(b);
-  });
+function manifestOrder(fileTypes) {
+  return [...fileTypes].sort(
+    (a, b) => FILE_TYPE_IDS.indexOf(a) - FILE_TYPE_IDS.indexOf(b),
+  );
+}
+
+/**
+ * The one-line "look here first" pointer, for the volatile part of the prompt.
+ *
+ * Pure function of the question — no database, no site — so the caller can
+ * place it after the breakpoint without a second query. It names a file type
+ * that may or may not be present; the inventory inside the cached block is the
+ * authority on what actually exists, and the wording defers to it.
+ */
+export function relevanceHint(question) {
+  const fileType = pickFileType(question);
+  const label = getFileType(fileType)?.label ?? fileType;
+  return (
+    `คำถามนี้น่าจะเกี่ยวกับไฟล์ **${label}** (${fileType}) มากที่สุด — ` +
+    `ถ้ามีบล็อกของไฟล์นี้อยู่ในข้อมูลด้านบน ให้ดูบล็อกนั้นก่อน ` +
+    `แต่ถ้าคำถามต้องใช้หลายไฟล์ ให้ดูบล็อกอื่นด้วย และถ้าไฟล์นี้ไม่มีในรายการ ` +
+    `ให้ยึดตามรายการไฟล์ที่มีอยู่จริงเป็นหลัก`
+  );
 }
 
 /**
@@ -664,10 +684,9 @@ export async function buildDataContext(site, question, { monthsBack = 3, onProgr
 
   if (present.length === 0) return null;
 
-  const ordered = relevanceOrder(
-    question,
-    present.map((entry) => entry.fileType),
-  );
+  // Manifest order, not question order: the bytes of this block must not
+  // depend on the question, or the prompt cache misses on every turn.
+  const ordered = manifestOrder(present.map((entry) => entry.fileType));
   const byType = new Map(present.map((entry) => [entry.fileType, entry]));
 
   const entries = [];
