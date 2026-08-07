@@ -47,8 +47,15 @@ function lastNYearMonths(n, from = new Date()) {
 /**
  * At or below this many rows every row is sent verbatim, exactly as before.
  * The ordinary daily exports are a few dozen rows and must not change shape.
+ *
+ * 40, not 30: a month of `daily_value` is 28-31 rows, so 30 cut the commonest
+ * file in the project in half and lost the per-day rows that "วันไหนยอดสูงสุด /
+ * ต่ำสุด" needs — the summary block carries min/max but not *which day*. One
+ * limit for every file type, deliberately: what makes a context too big is its
+ * row count, not which export produced it, and a per-type table would drift out
+ * of date the moment a new type is added.
  */
-const DETAIL_ROW_LIMIT = 30;
+const DETAIL_ROW_LIMIT = 40;
 
 /** How many real rows accompany the summary once a file is too big to send whole. */
 const SAMPLE_ROW_LIMIT = 15;

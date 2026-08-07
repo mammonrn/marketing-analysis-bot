@@ -27,6 +27,8 @@ import fs from 'node:fs';
 import XLSX from 'xlsx';
 import { getFileType } from './fileTypes.js';
 import { normaliseDate, yearMonthOf } from './dates.js';
+// Console-only and dependency-free, so it is safe on the worker thread too.
+import { logger } from '../logger.js';
 
 /**
  * A source is either a path to read or the bytes themselves.
@@ -52,6 +54,73 @@ function cellToPlain(value) {
   // booleans (formulas resolved to their computed value) — no exceljs-style
   // {result}/{richText}/{text} wrapper objects to unwrap here.
   return value;
+}
+
+/**
+ * Power BI writes its matrix furniture into the same grid as the data: a
+ * `Total` row under the last real row, and an `Applied filters: ...` trailer
+ * below that. Both carry values, so `readSheet`'s blank-row check keeps them,
+ * and both then count as data everywhere downstream — a 31-day July
+ * `daily_value` export reaches `parsed_rows` as 33 rows, which is how the bot
+ * came to answer "รวมทั้งเดือน 33 วัน".
+ *
+ * Miscounting the days is the visible symptom, not the whole damage. The
+ * `Total` row's figures are the month's sum, so leaving it in also inflates
+ * every sum, average, maximum and ranking computed from the file. That is why
+ * it is dropped here, at the read, rather than where a count is displayed:
+ * everything downstream — `parsed_rows`, the aggregate summaries, the stats
+ * block in `query.js` — reads from this one point.
+ */
+const SUMMARY_LABELS = [
+  'total',
+  'grand total',
+  'subtotal',
+  'sub total',
+  'sum',
+  'applied filters',
+  'รวม',
+  'รวมทั้งหมด',
+  'ผลรวม',
+  'ยอดรวม',
+];
+
+function isSummaryLabel(value) {
+  if (typeof value !== 'string') return false;
+  const s = value.trim().toLowerCase();
+  if (s === '') return false;
+  // Anchored at the start and required to end there or at a separator, so a
+  // real row is never dropped for containing the word ("Total Mems" is a
+  // column, "sumalee" is a username).
+  return SUMMARY_LABELS.some(
+    (label) => s === label || s.startsWith(`${label} `) || s.startsWith(`${label}:`),
+  );
+}
+
+/**
+ * Drops the furniture rows described above.
+ *
+ * Two independent tests, because neither alone covers both files seen:
+ * the label test catches `Total` / `Applied filters:` wherever a sheet has no
+ * date column at all, and the date test catches a total row whose label cell
+ * is simply blank. A row is furniture if either says so.
+ */
+export function dropNonDataRows(rows, { headers = [], dateColumn = null } = {}) {
+  // The label test looks only at the leading column — that is where Power BI
+  // puts the word — because scanning every cell would eventually discard a
+  // real row over an unrelated cell that happens to read "Total".
+  const labelColumn = headers.find((header) => header) ?? null;
+  // The date test only runs when the column is genuinely in this sheet. A
+  // file type resolved from a filename rather than a signature could name a
+  // column that isn't there, and every row would fail a test it never took.
+  const dateKey = dateColumn && headers.includes(dateColumn) ? dateColumn : null;
+
+  if (!labelColumn && !dateKey) return rows;
+
+  return rows.filter((row) => {
+    if (labelColumn && isSummaryLabel(row[labelColumn])) return false;
+    if (dateKey && normaliseDate(row[dateKey]) === null) return false;
+    return true;
+  });
 }
 
 /** Reads the first worksheet's header row + data rows, keyed by header text. */
@@ -193,7 +262,27 @@ export async function readAndShapeRows({
     return parsePivotSheet(source, { valueKey: type.pivotValueKey });
   }
 
-  const { rows } = await readSheet(source);
+  const { headers, rows: sheetRows } = await readSheet(source);
+
+  // Before anything counts, aggregates or stores these rows. `dateColumn` is
+  // supplied directly on the `year-month` path; on the typed path it comes
+  // from the manifest, and it is the *source* column for aggregating types
+  // (`AddTime`) because their `dateColumn` names a key on the summary row that
+  // does not exist yet.
+  const rawDateColumn = dateColumn ?? type?.sourceDateColumn ?? type?.dateColumn ?? null;
+  const rows = dropNonDataRows(sheetRows, { headers, dateColumn: rawDateColumn });
+
+  if (rows.length !== sheetRows.length) {
+    // Logged rather than reported as progress: it is the one line that
+    // explains a row count not matching the sheet, and a future export that
+    // starts shedding real rows here should be findable without a repro.
+    logger.info('dropped non-data rows from sheet', {
+      fileType,
+      shape,
+      dropped: sheetRows.length - rows.length,
+      kept: rows.length,
+    });
+  }
   onProgress?.({ phase: 'read', rowsRead: rows.length });
 
   // Counting months is the whole job for ingest, and the answer is a handful
