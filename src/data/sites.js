@@ -21,8 +21,44 @@ const ALIASES_PATH = path.join(ROOT, 'config', 'site-aliases.json');
 
 const raw = JSON.parse(fs.readFileSync(ALIASES_PATH, 'utf8'));
 
+/**
+ * `moneyFactor` used to be a single number in the JSON (787 for SH666), which
+ * silently fused two unrelated things: Power BI's own ×1,000 de-scaling, which
+ * is a property of the export and never changes, and the MMK→THB rate, which
+ * is a market figure that goes stale. Nothing recorded which half was which,
+ * or when the rate was taken.
+ *
+ * So the file now carries `scaleFactor`, `fxRate` and `fxRateAsOf` separately
+ * and the factor is derived here. Deliberately not stored: two numbers that
+ * must agree are two numbers that eventually will not.
+ *
+ * A site already in THB writes `fxRate: 1` rather than omitting it — an
+ * absent rate would be indistinguishable from a forgotten one, and `fxRate: 1`
+ * is what lets `formatContext` say "no currency conversion applies here"
+ * instead of staying silent.
+ */
+function describeSite(canonical, entry) {
+  const { scaleFactor, fxRate } = entry;
+
+  if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+    throw new Error(`site ${canonical}: scaleFactor must be a positive number`);
+  }
+  if (!Number.isFinite(fxRate) || fxRate <= 0) {
+    throw new Error(`site ${canonical}: fxRate must be a positive number`);
+  }
+
+  return {
+    canonical,
+    ...entry,
+    /** Derived, never stored: what `toThb` multiplies a file value by. */
+    moneyFactor: scaleFactor * fxRate,
+    /** True when the site's figures are already baht and only need de-scaling. */
+    needsFxConversion: fxRate !== 1,
+  };
+}
+
 export const SITES = Object.fromEntries(
-  Object.entries(raw).map(([canonical, entry]) => [canonical, { canonical, ...entry }]),
+  Object.entries(raw).map(([canonical, entry]) => [canonical, describeSite(canonical, entry)]),
 );
 
 export const ALL_SITE_KEYS = Object.keys(SITES);
