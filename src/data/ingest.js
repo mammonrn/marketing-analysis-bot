@@ -15,7 +15,9 @@
  *   month before upload" — the ordinary end-of-month upload pattern.
  * - **Which site.** Tries the caption/message text, then the filename, both
  *   via `normalizeSiteName` — the one function spec §3B requires everywhere
- *   a site name needs resolving.
+ *   a site name needs resolving. Callers resolve a site to decide what to ask
+ *   the user; `canonicalSiteOrThrow` below is what guarantees the stored key
+ *   is canonical, and it sits on the write path so no route can skip it.
  */
 
 import fs from 'node:fs';
@@ -133,7 +135,30 @@ function writeTemp(chatId, buffer) {
   return absPath;
 }
 
-function writeFinal({ site, yearMonth, fileType, buffer, originalFilename, fileSize }) {
+/**
+ * The one place a `site` becomes a stored key.
+ *
+ * Every write path funnels through here — the auto-detected upload, the
+ * "user typed the site name" reply, and the overwrite-confirm — so this is
+ * where the canonical form is enforced rather than in each of them. The
+ * callers still resolve a site of their own, but only to drive their own
+ * control flow (ask for a name / reject an unusable one); what they resolve
+ * is never what gets written unless it survives this call.
+ *
+ * Throwing rather than storing the input verbatim is deliberate. A raw
+ * "SH666" written here reads back as a site that has no data at all, because
+ * every reader looks it up as `shwe666` — a silent, invisible failure that
+ * only shows up much later as "ไฟล์นี้ยังไม่ถูกอัปโหลด" for a file that is
+ * plainly there.
+ */
+function canonicalSiteOrThrow(siteInput) {
+  const site = normalizeSiteName(siteInput);
+  if (!site) throw new Error(`Refusing to store a file under an unknown site: ${siteInput}`);
+  return site;
+}
+
+function writeFinal({ site: siteInput, yearMonth, fileType, buffer, originalFilename, fileSize }) {
+  const site = canonicalSiteOrThrow(siteInput);
   const existing = findRawFile({ site, yearMonth, fileType });
   const absPath = finalPathFor({ site, yearMonth, fileType });
   fs.writeFileSync(absPath, buffer);
@@ -150,7 +175,13 @@ function writeFinal({ site, yearMonth, fileType, buffer, originalFilename, fileS
   return row;
 }
 
-function finishOrConfirm({ site, yearMonth, fileType, buffer, originalFilename, fileSize, chatId }) {
+function finishOrConfirm({ site: siteInput, yearMonth, fileType, buffer, originalFilename, fileSize, chatId }) {
+  // Normalised here as well as in `writeFinal`, because the duplicate branch
+  // does not reach `writeFinal` in this call — it parks the site in
+  // `pending_duplicates` and only writes if the user confirms, possibly after
+  // a restart. Staging a non-canonical key would defer the same corruption
+  // rather than prevent it.
+  const site = canonicalSiteOrThrow(siteInput);
   const existing = findRawFile({ site, yearMonth, fileType });
   const isExactDuplicate =
     existing && existing.original_filename === originalFilename && existing.file_size === fileSize;

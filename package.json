@@ -12,6 +12,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "check:skill": "node scripts/check-skill.mjs",
+    "check:sitekeys": "node scripts/check-site-keys.mjs",
     "smoke": "node scripts/smoke-miniapp.mjs",
     "sync:skill": "bash scripts/sync-skill.sh",
     "test": "node --test test/*.test.js"

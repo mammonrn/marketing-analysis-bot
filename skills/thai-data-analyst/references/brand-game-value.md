@@ -10,15 +10,15 @@
 |--------|-----------------|
 | **GameKind** | ประเภทของเกม (SLOT, FISH, CASINO, GAMES, SPORT, ARCADE, POKER, LOTTO, PROMO) |
 | **CIn** | Coin In / Turnover รวม — ยอดเดิมพันทั้งหมดของ game type นั้น (เป็นเงิน — รายงานด้วย `CIn_THB`) |
-| **CIn (np)%** | % ของ CIn ที่มาจาก non-promo players (decimal → คูณ 100) |
+| **CIn (np)%** | % ของ CIn ที่มาจาก non-promo players (เป็น % — รายงานด้วย `CIn (np)%_pct`) |
 | **Nw** | Net Win — กำไรสุทธิของ casino จาก game type นั้น (เป็นเงิน — รายงานด้วย `Nw_THB`) |
-| **RTP** | Return to Player — % ที่จ่ายคืนให้ผู้เล่น (decimal → คูณ 100) |
+| **RTP** | Return to Player — % ที่จ่ายคืนให้ผู้เล่น (เป็น % — รายงานด้วย `RTP_pct`) |
 | **DAU** | จำนวน unique players ที่เล่น game type นี้ (ช่วง 6 เดือน — ไม่ใช่รายวัน) |
-| **DAU% (np)** | % ของ DAU ที่ไม่รับโปรโมชั่น (decimal → คูณ 100) |
+| **DAU% (np)** | % ของ DAU ที่ไม่รับโปรโมชั่น (เป็น % — รายงานด้วย `DAU% (np)_pct`) |
 | **Nw (np)** | Net Win จาก non-promo players (เป็นเงิน — รายงานด้วย `Nw (np)_THB`) |
 | **Nw (p)** | Net Win จาก promo players (เป็นเงิน อาจติดลบ — รายงานด้วย `Nw (p)_THB`) |
-| **RTP (np)** | RTP เฉพาะกลุ่ม non-promo players (decimal → ×100) |
-| **RTP (p)** | RTP เฉพาะกลุ่ม promo players (decimal → ×100) |
+| **RTP (np)** | RTP เฉพาะกลุ่ม non-promo players (เป็น % — รายงานด้วย `RTP (np)_pct`) |
+| **RTP (p)** | RTP เฉพาะกลุ่ม promo players (เป็น % — รายงานด้วย `RTP (p)_pct`) |
 | **Counts** | จำนวน game rounds / ครั้งที่เดิมพันทั้งหมดใน 6 เดือน |
 
 **หมายเหตุ**: ไฟล์นี้เป็น aggregated data ของ **6 เดือนล่าสุด** — ไม่ใช่รายวัน
@@ -154,11 +154,8 @@ df = df[~df['GameKind'].str.contains('Total|Applied', na=False)].copy()
 # ไม่ต้องแปลงค่าเงิน — คอลัมน์ _THB (CIn_THB, Nw_THB, Nw (np)_THB, Nw (p)_THB)
 # มาพร้อมข้อมูลที่ระบบส่งให้แล้ว ใช้คอลัมน์เหล่านั้นเมื่อรายงานจำนวนเงิน
 
-# แปลง % columns (decimal → %)
-pct_cols = ['CIn (np)%', 'DAU% (np)', 'RTP', 'RTP (np)', 'RTP (p)']
-for col in pct_cols:
-    if col in df.columns:
-        df[col + '_pct'] = pd.to_numeric(df[col], errors='coerce') * 100
+# ไม่ต้องแปลง % — คอลัมน์ _pct (CIn (np)%_pct, DAU% (np)_pct, RTP_pct,
+# RTP (np)_pct, RTP (p)_pct) มาพร้อมข้อมูลที่ระบบส่งให้แล้ว
 
 # Market share
 total_cin = df[df['GameKind'] != 'PROMO']['CIn'].sum()

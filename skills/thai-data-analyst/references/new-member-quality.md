@@ -12,7 +12,7 @@
 | **New** | New Members | สมาชิกใหม่ที่สมัครทั้งหมดในวันนั้น |
 | **New (Ref.)** | New Members (Referral) | สมาชิกใหม่ที่มาจากการชวนเพื่อน (Referral/Invite) — เพื่อนที่ชวนจะได้รางวัล/โบนัสเป็นการตอบแทน |
 | **Verify** | Verified Members | จำนวน member ที่ผ่านการยืนยันตัวตนแล้ว |
-| **Verify%** | Verification Rate | % ของ New ที่ผ่านการยืนยันตัวตน — ค่าจาก Power BI เป็น decimal ต้องคูณ 100 ก่อนแสดง |
+| **Verify%** | Verification Rate | % ของ New ที่ผ่านการยืนยันตัวตน — เป็น % ให้รายงานด้วย `Verify%_pct` |
 | **1st New%** | 1st Deposit Same-Day Rate | % ของ New ที่สมัครแล้วฝากเงินเล่นในวันเดียวกันกับที่สมัคร — ยิ่งสูงยิ่งดี แสดงถึงคุณภาพ traffic |
 | **1st New Mems** | 1st Deposit Same-Day Members | จำนวนจริงของ member ที่สมัครแล้วฝากเงินเล่นในวันเดียวกัน |
 | **1st New (BIn)** | 1st New Billing In | ยอดเงินฝากรวมของ 1st New Mems — เป็นเงิน ให้รายงานด้วย `1st New (BIn)_THB` |
@@ -36,14 +36,16 @@
 
 ## การแสดงผล % (สำคัญ!)
 
-ค่าต่อไปนี้จาก Power BI เป็น decimal ต้องคูณ 100 ก่อนแสดงเสมอ:
+> **หน่วย %:** Power BI เก็บคอลัมน์เหล่านี้เป็นทศนิยม ระบบแปลงเป็นเปอร์เซ็นต์
+> มาให้แล้วในคอลัมน์ที่ลงท้าย `_pct` ให้อ้างอิงคอลัมน์เหล่านั้น ห้ามคูณ 100 เอง
+> (ดูรายละเอียดใน SKILL.md หัวข้อ "การแสดงผล %")
 
-| Column | ค่าในไฟล์ | แสดงเป็น |
+| คอลัมน์ดิบ (ทศนิยม) | คอลัมน์ที่ใช้รายงาน | แสดงเป็น |
 |--------|-----------|---------|
-| Verify% | 0.7193 | 71.9% |
-| 1st New% | 0.0982 | 9.8% |
-| 1st New (np%) | 0.9321 | 93.2% |
-| 1st Day (np%) | 0.8908 | 89.1% |
+| Verify% = 0.7193 | `Verify%_pct` | 71.9% |
+| 1st New% = 0.0982 | `1st New%_pct` | 9.8% |
+| 1st New (np%) = 0.9321 | `1st New (np%)_pct` | 93.2% |
+| 1st Day (np%) = 0.8908 | `1st Day (np%)_pct` | 89.1% |
 
 ---
 
@@ -185,11 +187,8 @@ df = pd.read_excel("Daily (1st New & 1st)  (Click drilldown icon can get monthly
 df = df[df['Date'].apply(lambda x: hasattr(x, 'year') and not isinstance(x, float))].copy()
 df = df[df['New'].notna()].copy()
 
-# แปลง % columns (decimal → %)
-pct_cols = ['Verify%', '1st New%', '1st New (np%)', '1st Day (np%)']
-for col in pct_cols:
-    if col in df.columns:
-        df[col] = df[col] * 100
+# ไม่ต้องแปลง % — คอลัมน์ _pct (Verify%_pct, 1st New%_pct, 1st New (np%)_pct,
+# 1st Day (np%)_pct) มาพร้อมข้อมูลที่ระบบส่งให้แล้ว
 
 # ไม่ต้องแปลงค่าเงิน — คอลัมน์ '1st New (BIn)_THB' และ '1st Day (BIn)_THB'
 # มาพร้อมข้อมูลที่ระบบส่งให้แล้ว

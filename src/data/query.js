@@ -13,19 +13,82 @@ import { ensureParsed } from './parse.js';
 import { findRawFile, queryParsedRows, listRawFiles } from './db.js';
 import { logger } from '../logger.js';
 
+/**
+ * Question → file type. A wrong pick fails in the most confusing way possible:
+ * `daily_value` is the fallback and it is almost always uploaded, so the model
+ * receives a context that is real but about the wrong report, and truthfully
+ * reports that the file the user asked about "has not been uploaded" — while
+ * it sits in the database. That is the bug this list keeps having.
+ *
+ * Hence the language rule: these questions arrive in Thai, in English, and
+ * mixed inside one sentence ("คุณภาพ new member เดือน 7 เป็นยังไง"), because the
+ * column names in the exports are English while the conversation is Thai.
+ * Every route therefore needs the Thai term, the English term, AND the way
+ * they get spliced together. A route with only its Thai patterns silently
+ * routes half its real traffic to `daily_value`.
+ */
 const ROUTES = [
-  { fileType: 'vip', patterns: [/\bvip\b/i, /big bettor/i, /high.?roller/i, /ลูกค้าใหญ่/, /ลูกค้า vip/i] },
+  {
+    fileType: 'vip',
+    patterns: [/\bvip\b/i, /big bettor/i, /high.?roller/i, /ลูกค้าใหญ่/, /ลูกค้า vip/i],
+  },
   {
     fileType: 'new_member_quality',
-    patterns: [/สมาชิกใหม่/, /1st new/i, /1st day/i, /delayed deposit/i, /\bverify/i, /ยืนยันตัวตน/],
+    patterns: [
+      /สมาชิกใหม่/,
+      /1st new/i,
+      /1st day/i,
+      /1st dep/i,
+      /delayed deposit/i,
+      /ฝากช้า/,
+      /\bverify/i,
+      /ยืนยันตัวตน/,
+      // The English and mixed forms of "new member", which is what the
+      // reported failure was asked in. `mem` covers "new mems" (the export's
+      // own column name) and "new member(s)" in one.
+      /\bnew\s*mem/i,
+      /member\s*ใหม่/i,
+      /สมัครใหม่/,
+      /คนใหม่/,
+      // "คุณภาพ member" / "member quality" — the report's own subject, in
+      // either language, without the word "new".
+      /คุณภาพ\s*(ของ)?\s*(new\s*)?(member|mem|สมาชิก)/i,
+      /member quality/i,
+    ],
   },
   {
     fileType: 'deposit_count_distribution',
-    patterns: [/power user/i, /casual/i, /21\+/, /จำนวนครั้ง.*ฝาก/, /ความถี่.*ฝาก/, /deposit count/i],
+    patterns: [
+      /power user/i,
+      /casual/i,
+      /21\+/,
+      /จำนวนครั้ง.*ฝาก/,
+      /ฝาก.*จำนวนครั้ง/,
+      /ความถี่.*ฝาก/,
+      /ฝาก.*ความถี่/,
+      /deposit count/i,
+      /deposit frequency/i,
+      /ฝากกี่ครั้ง/,
+    ],
   },
   {
     fileType: 'brand_game_value',
-    patterns: [/สล็อต/, /brand value/i, /fish shooting/i, /ยิงปลา/, /gamekind/i, /ประเภทเกม/],
+    patterns: [
+      /สล็อต/,
+      /brand value/i,
+      /fish shooting/i,
+      /ยิงปลา/,
+      /gamekind/i,
+      /ประเภทเกม/,
+      // The English game names are what the export actually contains, so they
+      // are what people type: "slot vs fish เป็นยังไง".
+      /\bslot\b/i,
+      /\bfish\b/i,
+      /game kind/i,
+      /game type/i,
+      /ค่ายเกม/,
+      /เกมไหน/,
+    ],
   },
 ];
 
@@ -154,6 +217,27 @@ function renderRow(record, meta) {
  * Every number comes from the site's own config entry, so a fourth site
  * describes itself correctly the day it is added.
  */
+/**
+ * The percentage counterpart of `currencyGuidance`, and it exists for exactly
+ * the same reason.
+ *
+ * `normaliseRow` adds a correct `Verify%_pct` (75.5) beside the raw
+ * `Verify%` (0.755187) — Power BI stores these as decimals — but nothing ever
+ * said so. The reference files, meanwhile, tell the analyst to "คูณ 100 ก่อนแสดง",
+ * which makes `_pct` read as a column it is supposed to produce rather than
+ * one it has been handed. Both failure modes follow from that: reporting the
+ * raw decimal as "Verify 0.76%", and multiplying the already-converted
+ * `_pct` by 100 again for "7,551%".
+ *
+ * Kept separate from the currency block because it applies to every site
+ * identically — there is no per-site rate involved, only a decimal convention.
+ */
+const PERCENT_GUIDANCE =
+  `คอลัมน์ที่ลงท้าย \`_pct\` คือค่าที่แปลงเป็นเปอร์เซ็นต์เรียบร้อยแล้ว (× 100 ให้แล้ว)\n` +
+  `ให้อ้างอิงคอลัมน์ \`_pct\` เสมอเมื่อพูดถึงเปอร์เซ็นต์ ห้ามนำไปคูณ 100 ซ้ำอีก\n` +
+  `คอลัมน์ดิบคู่ของมัน (เช่น \`Verify%\` = 0.755187) เป็นทศนิยมตามที่ Power BI เก็บ ` +
+  `ห้ามรายงานเป็นเปอร์เซ็นต์โดยตรง — ค่าที่ถูกคือ \`Verify%_pct\` = 75.5\n`;
+
 function currencyGuidance(siteInput) {
   const site = getSite(siteInput);
   if (!site) return '';
@@ -192,9 +276,19 @@ function currencyGuidance(siteInput) {
  * ones far below — exactly the wrong way round for a model skimming for a
  * number to quote.
  *
+ * `_pct` gets identical treatment: `Verify%_pct` (75.5) ahead of the raw
+ * `Verify%` (0.755), both labelled. Without it the summary offers two columns
+ * whose names differ by a suffix and whose values differ by 100x, and nothing
+ * on the line says which one is the percentage.
+ *
  * Display order only. The ranking that picks the sample sorts its own copy by
  * sum, and is deliberately left alone.
  */
+const CONVERTED_SUFFIXES = [
+  { suffix: '_THB', unit: 'บาท', rawUnit: 'ค่าดิบตามไฟล์ ยังไม่แปลงเป็นบาท' },
+  { suffix: '_pct', unit: 'เปอร์เซ็นต์ (%)', rawUnit: 'ค่าดิบตามไฟล์ เป็นทศนิยม ยังไม่ใช่ %' },
+];
+
 function orderStatsForReading(stats) {
   const byColumn = new Map(stats.map((stat) => [stat.column, stat]));
   const out = [];
@@ -208,14 +302,21 @@ function orderStatsForReading(stats) {
 
   for (const stat of stats) {
     if (placed.has(stat.column)) continue;
-    if (stat.column.endsWith('_THB')) {
-      place(stat, 'บาท');
+
+    const own = CONVERTED_SUFFIXES.find(({ suffix }) => stat.column.endsWith(suffix));
+    if (own) {
+      place(stat, own.unit);
       continue;
     }
-    const converted = byColumn.get(`${stat.column}_THB`);
-    if (converted) {
-      place(converted, 'บาท');
-      place(stat, 'ค่าดิบตามไฟล์ ยังไม่แปลงเป็นบาท');
+
+    const pair = CONVERTED_SUFFIXES.map((entry) => ({
+      entry,
+      converted: byColumn.get(`${stat.column}${entry.suffix}`),
+    })).find(({ converted }) => converted);
+
+    if (pair) {
+      place(pair.converted, pair.entry.unit);
+      place(stat, pair.entry.rawUnit);
     } else {
       place(stat, null);
     }
@@ -284,8 +385,13 @@ export function formatContext({ site, fileType, availableMonths, rows }) {
     `เว็บ: ${siteDisplayName(site)}\n` +
     `เดือนที่มีข้อมูล: ${availableMonths.join(', ')}\n` +
     // On both paths, small file and large: the ambiguity it resolves is in the
-    // rows themselves, which are present either way.
-    currencyGuidance(site);
+    // rows themselves, which are present either way. That applies to the
+    // percentage columns too — and more so, because a 31-row file like
+    // new_member_quality goes down the small-file path, where every row is
+    // sent verbatim and the summary block that could have carried a unit
+    // label is never built.
+    currencyGuidance(site) +
+    PERCENT_GUIDANCE;
 
   const entries = rows.map((r) => ({
     record: { ...normaliseRow(r.row, site), ...deriveMetrics(r.row, site) },
