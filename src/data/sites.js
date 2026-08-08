@@ -36,9 +36,23 @@ const raw = JSON.parse(fs.readFileSync(ALIASES_PATH, 'utf8'));
  * absent rate would be indistinguishable from a forgotten one, and `fxRate: 1`
  * is what lets `formatContext` say "no currency conversion applies here"
  * instead of staying silent.
+ *
+ * `pointsScaleFactor` is the same idea for a different export. The point logs
+ * (`bonus.xlsx`, `reward point.xlsx`, `other transfer.xlsx`) do not carry the
+ * ×1,000 de-scaling the Power BI money columns do — SH666's `Points` column
+ * is scaled by 100,000, so a raw `1.200` is 120,000 MMK, not 1,200. Reading
+ * it with `scaleFactor` understates the figure a hundredfold, and reading it
+ * raw understates it by 100,000x, which is what "Loyalty Point รวม 278.8"
+ * was.
+ *
+ * Unlike `scaleFactor` it is deliberately *optional*: only SH666's scale has
+ * been verified against a real file. A site with no value declared has no
+ * default — see `aggregateBonusLog`, which refuses to guess. Borrowing
+ * SH666's number for U89/88F would be the same mistake as the old fused
+ * `moneyFactor`: a figure that looks authoritative with nothing behind it.
  */
 function describeSite(canonical, entry) {
-  const { scaleFactor, fxRate } = entry;
+  const { scaleFactor, fxRate, pointsScaleFactor } = entry;
 
   if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
     throw new Error(`site ${canonical}: scaleFactor must be a positive number`);
@@ -46,12 +60,24 @@ function describeSite(canonical, entry) {
   if (!Number.isFinite(fxRate) || fxRate <= 0) {
     throw new Error(`site ${canonical}: fxRate must be a positive number`);
   }
+  // Absent is allowed and meaningful ("not established yet"); present but
+  // unusable is a typo in the config and must not be silently downgraded to
+  // "absent", or the throw below would never fire for the site that needs it.
+  if (pointsScaleFactor !== undefined && (!Number.isFinite(pointsScaleFactor) || pointsScaleFactor <= 0)) {
+    throw new Error(`site ${canonical}: pointsScaleFactor must be a positive number when present`);
+  }
 
   return {
     canonical,
     ...entry,
     /** Derived, never stored: what `toThb` multiplies a file value by. */
     moneyFactor: scaleFactor * fxRate,
+    /**
+     * The point-log counterpart of `moneyFactor`, or `null` when this site's
+     * point scale has not been established. Null is a state callers must
+     * handle, not a zero to multiply by.
+     */
+    pointsFactor: pointsScaleFactor === undefined ? null : pointsScaleFactor * fxRate,
     /** True when the site's figures are already baht and only need de-scaling. */
     needsFxConversion: fxRate !== 1,
   };

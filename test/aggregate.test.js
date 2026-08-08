@@ -18,6 +18,11 @@ process.env.ANTHROPIC_API_KEY ??= 'test-key';
 
 const { aggregateDepositDetail, aggregateBonusLog } = await import('../src/data/aggregate.js');
 const { parsePivotSheet } = await import('../src/data/parse.js');
+const { SITES, applyFxOverride, clearFxOverrides } = await import('../src/data/sites.js');
+
+// The only site whose `Points` scale has been verified against a real file,
+// and therefore the only one these tests can convert with.
+const SH666 = 'shwe666';
 
 test('aggregateDepositDetail summarises per day and payment channel', () => {
   const rows = [
@@ -72,7 +77,7 @@ test('aggregateBonusLog sums points per day and type', () => {
     { AddTime: '2026-06-01', Type: 'Loyalty Point', Points: 5.5 },
     { AddTime: '2026-06-01', Type: 'Referrer Reward Point', Points: 3 },
     { AddTime: '2026-06-02', Type: 'Loyalty Point', Points: 1 },
-  ]);
+  ], { site: SH666 });
 
   assert.equal(out.length, 3);
   const loyaltyDay1 = out.find((r) => r.Date === '2026-06-01' && r.Type === 'Loyalty Point');
@@ -84,9 +89,103 @@ test('aggregateBonusLog counts a row even when its Points cell is unreadable', (
   const out = aggregateBonusLog([
     { AddTime: '2026-06-01', Type: 'Loyalty Point', Points: 10 },
     { AddTime: '2026-06-01', Type: 'Loyalty Point', Points: null },
-  ]);
+  ], { site: SH666 });
   assert.equal(out[0].total_points, 10);
   assert.equal(out[0].transaction_count, 2);
+});
+
+/**
+ * The regression this whole change exists for.
+ *
+ * Confirmed against SH666's own `reward_point.xlsx` for 2026-07: the "Money
+ * Daily" row reads 1.200 in the file and is 120,000 MMK in reality. Reading
+ * the column raw is what produced "Loyalty Point รวม 278.8" for a figure in
+ * the tens of millions of kyat.
+ */
+test('a raw Points value of 1.200 is 120,000 MMK before any fx conversion', (t) => {
+  t.after(clearFxOverrides);
+  // fxRate 1 isolates the point scale from the currency step, so this asserts
+  // the MMK figure itself rather than inferring it back out of a baht number.
+  applyFxOverride(SH666, { fxRate: 1, fxRateAsOf: '2026-07-31' });
+
+  const out = aggregateBonusLog(
+    [{ AddTime: '2026-07-15', Type: 'Money Daily', Points: 1.2 }],
+    { site: SH666 },
+  );
+
+  assert.equal(out[0].total_points, 1.2, 'the raw column must survive untouched');
+  assert.equal(out[0].total_points_THB, 120_000);
+});
+
+test('120,000 MMK then converts to baht at the site rate', () => {
+  const out = aggregateBonusLog(
+    [{ AddTime: '2026-07-15', Type: 'Money Daily', Points: 1.2 }],
+    { site: SH666 },
+  );
+
+  const { pointsScaleFactor, fxRate } = SITES[SH666];
+  assert.equal(pointsScaleFactor, 100_000);
+  // 1.2 × 100,000 × 0.787 = 94,440.
+  assert.equal(out[0].total_points_THB, 1.2 * pointsScaleFactor * fxRate);
+  assert.ok(Math.abs(out[0].total_points_THB - 94_440) < 1e-6);
+});
+
+test('aggregateBonusLog keeps the raw sum alongside the converted one', () => {
+  const out = aggregateBonusLog(
+    [
+      { AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 1 },
+      { AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 2 },
+    ],
+    { site: SH666 },
+  );
+
+  // Both columns, because only the raw one can be checked against Power BI.
+  assert.equal(out[0].total_points, 3);
+  assert.equal(out[0].total_points_THB, 3 * SITES[SH666].pointsFactor);
+});
+
+test('the converted column uses the _THB spelling query.js pairs and labels', () => {
+  const [row] = aggregateBonusLog(
+    [{ AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 1 }],
+    { site: SH666 },
+  );
+  // Lower-case `_thb` would reach the model as an unexplained third number:
+  // `CONVERTED_SUFFIXES` in query.js matches on the exact `_THB` suffix.
+  assert.ok('total_points_THB' in row);
+  assert.ok(!('total_points_thb' in row));
+});
+
+test('a site with no pointsScaleFactor refuses to guess one', () => {
+  // U89/88F have no verified scale, so their point logs must fail loudly
+  // rather than borrow SH666's 100,000 — the failure mode the old fused
+  // `moneyFactor` taught this codebase to fear.
+  for (const site of ['ubet89', '88fed']) {
+    assert.equal(SITES[site].pointsFactor, null, `${site} must not have a guessed factor`);
+    assert.throws(
+      () => aggregateBonusLog([{ AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 1 }], { site }),
+      /ยังไม่ได้ตั้งค่า pointsScaleFactor/,
+      `${site} should refuse rather than convert`,
+    );
+  }
+});
+
+test('aggregateBonusLog refuses to run without a site at all', () => {
+  assert.throws(
+    () => aggregateBonusLog([{ AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 1 }]),
+    /ต้องระบุเว็บ/,
+  );
+});
+
+test('a runtime fx change moves the converted points with it', (t) => {
+  t.after(clearFxOverrides);
+  const rows = [{ AddTime: '2026-07-15', Type: 'Money Daily', Points: 1.2 }];
+
+  const atConfigRate = aggregateBonusLog(rows, { site: SH666 })[0].total_points_THB;
+  applyFxOverride(SH666, { fxRate: 0.812, fxRateAsOf: '2026-08-08' });
+  const atNewRate = aggregateBonusLog(rows, { site: SH666 })[0].total_points_THB;
+
+  assert.notEqual(atNewRate, atConfigRate);
+  assert.equal(atNewRate, 1.2 * 100_000 * 0.812);
 });
 
 function hourPivotBuffer(measureLabel) {

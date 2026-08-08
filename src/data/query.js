@@ -278,7 +278,33 @@ const PERCENT_GUIDANCE =
   `คอลัมน์ดิบคู่ของมัน (เช่น \`Verify%\` = 0.755187) เป็นทศนิยมตามที่ Power BI เก็บ ` +
   `ห้ามรายงานเป็นเปอร์เซ็นต์โดยตรง — ค่าที่ถูกคือ \`Verify%_pct\` = 75.5\n`;
 
-function currencyGuidance(siteInput) {
+/**
+ * The point logs are the exception to "amounts in this file are ÷1,000".
+ *
+ * Their `Points` column carries its own scale (`pointsScaleFactor`), and the
+ * sentence above it — "จำนวนเงินในไฟล์ถูกตัด 3 ศูนย์ไว้ ... × 1,000 × 0.787" —
+ * is simply not true of it. Left unqualified, a model reading a bonus_log
+ * context is told the wrong factor for the one column in the file that is
+ * money, which is the confusion this whole change exists to end. Named here
+ * rather than read off `FILE_TYPES` because it is a property of the `Points`
+ * column, not of the aggregation these three happen to share.
+ */
+const POINT_LOG_TYPES = new Set(['bonus_log', 'reward_point', 'other_transfer']);
+
+function pointsGuidance(site, fileType) {
+  if (!POINT_LOG_TYPES.has(fileType) || site.pointsFactor === null) return '';
+
+  const pointsScale = fmt(site.pointsScaleFactor);
+  const rate = site.needsFxConversion ? ` แล้วคูณอัตราแลกเปลี่ยน ${site.fxRate}` : '';
+  return (
+    `⚠️ ไฟล์นี้เป็น point log — คอลัมน์ \`Points\` ในไฟล์ดิบ "ไม่ได้" ตัด 3 ศูนย์แบบคอลัมน์เงินอื่น ` +
+    `แต่ถูกย่อไว้ ${pointsScale} เท่า (ค่าดิบ 1.200 = ${fmt(1.2 * site.pointsScaleFactor)} ${site.currency})\n` +
+    `\`total_points_THB\` คือค่าที่คูณ ${pointsScale}${rate} กลับคืนให้เรียบร้อยแล้ว — ใช้ตัวนี้เมื่อพูดถึงต้นทุน point\n` +
+    `\`total_points\` คือผลรวมค่าดิบตามไฟล์ ใช้ cross-check กับ Power BI เท่านั้น ห้ามรายงานเป็นจำนวนเงิน\n`
+  );
+}
+
+function currencyGuidance(siteInput, fileType) {
   const site = getSite(siteInput);
   if (!site) return '';
 
@@ -286,7 +312,8 @@ function currencyGuidance(siteInput) {
   const common =
     `ให้อ้างอิงคอลัมน์ \`_THB\` เสมอเมื่อพูดถึงจำนวนเงิน ห้ามนำไปคูณซ้ำอีก\n` +
     `คอลัมน์ดิบที่ไม่มี \`_THB\` คือค่าตามที่ปรากฏในไฟล์ต้นฉบับ ` +
-    `ใช้เมื่อต้อง cross-check กับ Power BI เท่านั้น ห้ามรายงานเป็นจำนวนเงิน\n`;
+    `ใช้เมื่อต้อง cross-check กับ Power BI เท่านั้น ห้ามรายงานเป็นจำนวนเงิน\n` +
+    pointsGuidance(site, fileType);
 
   // A THB site must not be told about an exchange rate it does not have —
   // "× 1" would read as a conversion that happened. The ×1,000 de-scaling
@@ -502,7 +529,7 @@ export function formatContext({ site, fileType, availableMonths, rows }) {
     // new_member_quality goes down the small-file path, where every row is
     // sent verbatim and the summary block that could have carried a unit
     // label is never built.
-    currencyGuidance(site) +
+    currencyGuidance(site, fileType) +
     PERCENT_GUIDANCE;
 
   const entries = rows.map((r) => ({

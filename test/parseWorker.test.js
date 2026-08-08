@@ -24,12 +24,15 @@ process.env.ANTHROPIC_API_KEY ??= 'test-key';
 
 const { parseWorkbookRows, WORKER_MIN_BYTES } = await import('../src/data/parseRunner.js');
 const { pickFileType } = await import('../src/data/query.js');
+const { SITES, applyFxOverride, clearFxOverrides } = await import('../src/data/sites.js');
 
 const ROW_COUNT = 60000;
 
 let tmpDir;
 let bigFixture;
 let smallFixture;
+let bigBonusFixture;
+let smallBonusFixture;
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -56,12 +59,38 @@ function depositDetailWorkbook(rowCount) {
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 
+/**
+ * A point log, whose `Points` column is on the ×100,000 scale. Every row is
+ * the real SH666 value this change was reported against: raw 1.200 = 120,000
+ * MMK.
+ */
+function bonusLogWorkbook(rowCount) {
+  const aoa = [['AddTime', 'Type', 'Username', 'Lv', 'Points', 'Memo']];
+  for (let i = 0; i < rowCount; i += 1) {
+    aoa.push([
+      `2026-07-${String((i % 28) + 1).padStart(2, '0')}`,
+      'Money Daily',
+      `user_with_a_longish_name_${i}`,
+      '',
+      1.2,
+      `Money Daily ( Period No : ${i % 98} ) padded out so the file clears the worker threshold`,
+    ]);
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Export');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+
 before(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ads-analytics-worker-'));
   bigFixture = path.join(tmpDir, 'Detail (Last 6 Months).xlsx');
   fs.writeFileSync(bigFixture, depositDetailWorkbook(ROW_COUNT));
   smallFixture = path.join(tmpDir, 'small.xlsx');
   fs.writeFileSync(smallFixture, depositDetailWorkbook(20));
+  bigBonusFixture = path.join(tmpDir, 'bonus.xlsx');
+  fs.writeFileSync(bigBonusFixture, bonusLogWorkbook(ROW_COUNT));
+  smallBonusFixture = path.join(tmpDir, 'bonus-small.xlsx');
+  fs.writeFileSync(smallBonusFixture, bonusLogWorkbook(20));
 });
 
 after(() => {
@@ -192,6 +221,69 @@ test('a large buffer (not a path) survives the trip to the worker', async () => 
   const rows = await parseWorkbookRows({ buffer, shape: 'raw' });
   assert.equal(rows.length, ROW_COUNT);
   assert.ok('AddTime' in rows[0]);
+});
+
+/**
+ * `aggregateBonusLog` is the first aggregator that converts money, and it does
+ * so on whichever thread the parse landed on. These cover the two ways that
+ * could go wrong: the site never reaching the worker at all, and the worker's
+ * fresh module graph converting at the config rate after a rate change.
+ */
+test('the bonus fixture is big enough to take the worker path', () => {
+  assert.ok(fs.statSync(bigBonusFixture).size >= WORKER_MIN_BYTES);
+  assert.ok(fs.statSync(smallBonusFixture).size < WORKER_MIN_BYTES);
+});
+
+test('the site reaches the worker, so a big point log still converts', async () => {
+  const rows = await parseWorkbookRows({
+    filePath: bigBonusFixture,
+    fileType: 'bonus_log',
+    site: 'shwe666',
+  });
+
+  assert.ok(rows.length > 0);
+  // Every fixture row is 1.2, so a day's total is 1.2 × however many landed
+  // on it — and the converted column is that times the site's point factor.
+  for (const row of rows) {
+    assert.ok(Math.abs(row.total_points - 1.2 * row.transaction_count) < 1e-6);
+    assert.ok(
+      Math.abs(row.total_points_THB - row.total_points * SITES.shwe666.pointsFactor) < 1e-6,
+      'the worker must convert with the same factor the inline path uses',
+    );
+  }
+});
+
+test('worker and inline point logs agree, including after an fx change', async (t) => {
+  t.after(clearFxOverrides);
+  applyFxOverride('shwe666', { fxRate: 0.812, fxRateAsOf: '2026-08-08' });
+
+  const { readAndShapeRows } = await import('../src/data/workbook.js');
+  const viaWorker = await parseWorkbookRows({
+    filePath: bigBonusFixture, fileType: 'bonus_log', site: 'shwe666',
+  });
+  const inline = await readAndShapeRows({
+    filePath: bigBonusFixture, fileType: 'bonus_log', site: 'shwe666',
+  });
+
+  // Without the override crossing the thread boundary the worker would still
+  // be using the config's 0.787 — the same file converting two ways depending
+  // on its size.
+  assert.deepEqual(viaWorker, inline);
+  assert.ok(Math.abs(viaWorker[0].total_points_THB - viaWorker[0].total_points * 100_000 * 0.812) < 1e-6);
+});
+
+test('a point log for a site with no configured scale rejects rather than converting', async () => {
+  await assert.rejects(
+    () => parseWorkbookRows({ filePath: bigBonusFixture, fileType: 'bonus_log', site: 'ubet89' }),
+    /ยังไม่ได้ตั้งค่า pointsScaleFactor/,
+    'the refusal must survive the trip back from the worker',
+  );
+
+  // And on the inline path too, so file size cannot decide whether it fires.
+  await assert.rejects(
+    () => parseWorkbookRows({ filePath: smallBonusFixture, fileType: 'bonus_log', site: 'ubet89' }),
+    /ยังไม่ได้ตั้งค่า pointsScaleFactor/,
+  );
 });
 
 test('a worker that fails rejects instead of hanging', async () => {

@@ -16,7 +16,7 @@
  *
  * Three optional fields let a type deviate without a schema change:
  *
- * - `aggregate(rows)` — transaction logs (deposit_detail, bonus_log) run to
+ * - `aggregate(rows, { site })` — transaction logs (deposit_detail, bonus_log) run to
  *   six figures of rows, which is far more than a question ever needs and
  *   more than the process wants to hold. The raw file is still stored, but
  *   what lands in `parsed_rows` is a daily summary. `dateColumn` then refers
