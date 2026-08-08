@@ -61,8 +61,8 @@ before(async () => {
   seed({
     fileType: 'new_member_quality',
     rows: [
-      { Date: '2026-07-01', New: 30, 'Verify%': 0.72, '1st New%': 0.1, '1st New Mems': 3, '1st New (BIn)': 5, '1st Day Mems': 8, '1st Day (BIn)': 12, '1st New (np%)': 0.9, '1st Day (np%)': 0.85 },
-      { Date: '2026-07-02', New: 40, 'Verify%': 0.78, '1st New%': 0.2, '1st New Mems': 8, '1st New (BIn)': 9, '1st Day Mems': 14, '1st Day (BIn)': 20, '1st New (np%)': 0.95, '1st Day (np%)': 0.88 },
+      { Date: '2026-07-01', New: 30, 'New (Ref.)': 1, Verify: 21, 'Verify%': 0.72, '1st New%': 0.1, '1st New Mems': 3, '1st New (BIn)': 5, '1st Day Mems': 8, '1st Day (BIn)': 12, '1st New (np%)': 0.9, '1st Day (np%)': 0.85 },
+      { Date: '2026-07-02', New: 40, 'New (Ref.)': 2, Verify: 31, 'Verify%': 0.78, '1st New%': 0.2, '1st New Mems': 8, '1st New (BIn)': 9, '1st Day Mems': 14, '1st Day (BIn)': 20, '1st New (np%)': 0.95, '1st Day (np%)': 0.88 },
     ],
   });
   seed({
@@ -83,18 +83,29 @@ before(async () => {
   seed({
     fileType: 'vip',
     rows: [
-      { Username: 'alice', 'Last BIn 2 Y': 1, BIn: 500, R: 60, 'BIn Counts': 200, 'BIn Days': 90, 'Med. BIn': 12 },
-      { Username: 'bob', 'Last BIn 2 Y': 3, BIn: 300, R: 40, 'BIn Counts': 150, 'BIn Days': 70, 'Med. BIn': 8 },
-      { Username: 'carol', 'Last BIn 2 Y': 30, BIn: 900, R: 90, 'BIn Counts': 400, 'BIn Days': 120, 'Med. BIn': 20 },
-      { Username: 'dave', 'Last BIn 2 Y': 12, BIn: 100, R: 5, 'BIn Counts': 110, 'BIn Days': 55, 'Med. BIn': 2 },
+      { Username: 'alice', Agent: 'agentA', Phone: '0800000001', 'Last BIn 2 Y': 1, BIn: 500, R: 60, 'BIn Counts': 200, 'BIn Days': 90, 'Med. BIn': 12 },
+      { Username: 'bob', Agent: 'agentA', Phone: '0800000002', 'Last BIn 2 Y': 3, BIn: 300, R: 40, 'BIn Counts': 150, 'BIn Days': 70, 'Med. BIn': 8 },
+      { Username: 'carol', Agent: 'agentB', Phone: '0800000003', 'Last BIn 2 Y': 30, BIn: 900, R: 90, 'BIn Counts': 400, 'BIn Days': 120, 'Med. BIn': 20 },
+      { Username: 'dave', Agent: 'agentB', 'Last BIn 2 Y': 12, BIn: 100, R: 5, 'BIn Counts': 110, 'BIn Days': 55, 'Med. BIn': 2 },
     ],
   });
   seed({
     fileType: 'referrer',
     rows: [
       { Referrer: 'promoter1', 'Ref Bonus': 5, 'Total Mems': 100, 'Total BIn Mems': 60, BIn: 400, R: 50 },
-      // Paid more in referral bonus than the downline ever returned.
+      // Paid more in referral bonus than the downline ever returned, and only
+      // 4% of the people recruited ever deposited.
       { Referrer: 'promoter2', 'Ref Bonus': 40, 'Total Mems': 500, 'Total BIn Mems': 20, BIn: 50, R: 3 },
+      // Below the Total Mems >= 5 floor, so not a low-quality flag however bad
+      // its ratio looks.
+      { Referrer: 'tiny', 'Ref Bonus': 0, 'Total Mems': 2, 'Total BIn Mems': 0, BIn: 0, R: 0 },
+    ],
+  });
+  seed({
+    fileType: 'ad_agent',
+    rows: [
+      { 'AD / Agent': 'facebook', Agent: 'Total', 'Total Mems': 900, 'Total BIn Mems': 300, BIn: 700, Pro: 40, R: 90 },
+      { 'AD / Agent': 'tiktok', Agent: 'Total', 'Total Mems': 400, 'Total BIn Mems': 100, BIn: 200, Pro: 30, R: 20 },
     ],
   });
   seed({
@@ -104,6 +115,15 @@ before(async () => {
       { weekday: 'Monday', weekday_num: 1, hour: 4, avg_bin: 5 },
       { weekday: 'Tuesday', weekday_num: 2, hour: 20, avg_bin: 110 },
       { weekday: 'Tuesday', weekday_num: 2, hour: 4, avg_bin: 7 },
+    ],
+  });
+  seed({
+    fileType: 'avg_bin_mems_by_hour',
+    rows: [
+      { weekday: 'Monday', weekday_num: 1, hour: 20, avg_mems: 40 },
+      { weekday: 'Monday', weekday_num: 1, hour: 4, avg_mems: 3 },
+      { weekday: 'Tuesday', weekday_num: 2, hour: 20, avg_mems: 55 },
+      { weekday: 'Tuesday', weekday_num: 2, hour: 4, avg_mems: 4 },
     ],
   });
   seed({
@@ -131,6 +151,12 @@ after(() => {
 
 const sectionOf = (payload, id) => payload.sections.find((section) => section.id === id);
 const kpiOf = (section, label) => section.kpis.find((kpi) => kpi.label === label);
+const chartOf = (section, id) => section.charts.find((chart) => chart.id === id);
+const tableTitled = (section, fragment) =>
+  section.tables.find((table) => table.title.includes(fragment));
+const joined = (section) => section.insights.join(' | ');
+
+// --- shape -------------------------------------------------------------------
 
 test('a site/month with nothing uploaded produces no payload at all', async () => {
   // The caller turns this into "ยังไม่มีไฟล์เดือนนี้" rather than opening a
@@ -151,6 +177,28 @@ test('every declared section appears, in order, whether or not its file is there
   assert.equal(payload.yearMonth, MONTH);
 });
 
+test('every available section carries all five renderable parts', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  for (const section of payload.sections.filter((s) => s.available)) {
+    for (const key of ['alerts', 'kpis', 'charts', 'tables', 'insights']) {
+      assert.ok(Array.isArray(section[key]), `${section.id}.${key} is an array`);
+    }
+    assert.ok(section.kpis.length > 0, `${section.id} has KPIs`);
+    assert.ok(section.insights.length > 0, `${section.id} has insights`);
+  }
+});
+
+test('every KPI declares a unit the renderer knows how to format', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const known = new Set(['thb', 'pct', 'count', 'number', 'min', 'text']);
+  for (const section of payload.sections.filter((s) => s.available)) {
+    for (const kpi of section.kpis) {
+      assert.ok(known.has(kpi.unit), `${section.id} / ${kpi.label} has unit ${kpi.unit}`);
+      if (kpi.status) assert.ok(['good', 'warn', 'bad'].includes(kpi.status));
+    }
+  }
+});
+
 test('the payload states the rate its baht figures came from', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   assert.equal(payload.currency.currency, 'MMK');
@@ -159,7 +207,9 @@ test('the payload states the rate its baht figures came from', async () => {
   assert.ok(payload.currency.fxRateAsOf, 'the rate is dated');
 });
 
-test('money is reported from the pipeline_THB columns, never re-converted', async () => {
+// --- units -------------------------------------------------------------------
+
+test('money is reported from the pipeline _THB columns, never re-converted', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const overview = sectionOf(payload, 'overview');
 
@@ -172,20 +222,137 @@ test('money is reported from the pipeline_THB columns, never re-converted', asyn
 
 test('percentages come from the _pct columns and are not multiplied again', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
-  const overview = sectionOf(payload, 'overview');
+  const finance = sectionOf(payload, 'finance');
 
   // (0.95 + 1.02 + 1.05) / 3 = 1.00666… → 100.67%, not 1.0067 and not 10,067%.
-  const rtp = kpiOf(overview, 'RTP เฉลี่ยรายวัน');
+  const rtp = kpiOf(finance, 'RTP เฉลี่ย');
   assert.ok(Math.abs(rtp.value - 100.6667) < 0.001, `RTP was ${rtp.value}`);
   assert.equal(rtp.unit, 'pct');
 });
 
+test('the median is the median, not a second name for the mean', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const overview = sectionOf(payload, 'overview');
+  // RTP_pct over the three days is 95, 102, 105 → median 102, mean 100.67.
+  assert.ok(Math.abs(kpiOf(overview, 'RTP median').value - 102) < 0.001);
+});
+
 test('R / BIn is the ratio of the two monthly sums, not the mean of daily ratios', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const insights = joined(sectionOf(payload, 'overview'));
   // 50 / 600 = 8.33%. The mean of the daily ratios (20%, 20%, -3.3%) is 12.2%,
   // which is the number this must NOT produce.
-  const ratio = kpiOf(sectionOf(payload, 'overview'), 'R / BIn');
-  assert.ok(Math.abs(ratio.value - 8.3333) < 0.001, `R/BIn was ${ratio.value}`);
+  assert.match(insights, /8\.3%/);
+});
+
+// --- per-site benchmarks -----------------------------------------------------
+
+test('benchmark notes quote the site being reported on, never another site', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const overview = sectionOf(payload, 'overview');
+
+  // casino-metrics.md: SH666 RTP median 95.85%, DAU 473/day.
+  assert.match(kpiOf(overview, 'RTP median').note, /95\.85/);
+  assert.match(kpiOf(overview, 'DAU เฉลี่ย/วัน').note, /473/);
+  // u89-metrics.md's 96.7 / 1,062 must not appear anywhere in SH666's report.
+  const serialised = JSON.stringify(payload);
+  assert.equal(serialised.includes('96.7%'), false, "U89's RTP benchmark leaked into SH666");
+  assert.equal(serialised.includes('1,062'), false, "U89's DAU benchmark leaked into SH666");
+});
+
+test('a different site gets its own documented benchmarks', async () => {
+  seed({ site: 'ubet89', yearMonth: '2026-04', fileType: 'daily_value', rows: dailyValueRows });
+  const payload = await monthly.buildMonthlyPayload({ site: 'ubet89', yearMonth: '2026-04' });
+  const overview = sectionOf(payload, 'overview');
+
+  // u89-metrics.md: RTP median 96.7%, DAU 1,062/day.
+  assert.match(kpiOf(overview, 'RTP median').note, /96\.7/);
+  assert.match(kpiOf(overview, 'DAU เฉลี่ย/วัน').note, /1,062/);
+  assert.equal(JSON.stringify(payload).includes('95.85'), false, "SH666's benchmark leaked into U89");
+});
+
+test('a KPI with no documented benchmark for the site gets no status badge', async () => {
+  // 88fed-metrics.md documents no Delayed Depositors figure, so that KPI must
+  // not borrow SH666's 32/day — an unearned verdict is worse than none.
+  seed({
+    site: '88fed',
+    yearMonth: '2026-03',
+    fileType: 'new_member_quality',
+    rows: [
+      { Date: '2026-03-01', New: 30, Verify: 20, 'Verify%': 0.65, '1st New%': 0.13, '1st New Mems': 4, '1st Day Mems': 9, '1st New (np%)': 0.88, '1st Day (np%)': 0.9, '1st New (BIn)': 4, '1st Day (BIn)': 9 },
+    ],
+  });
+  const payload = await monthly.buildMonthlyPayload({ site: '88fed', yearMonth: '2026-03' });
+  const section = sectionOf(payload, 'new_member');
+
+  const delayed = kpiOf(section, 'Delayed Depositors เฉลี่ย/วัน');
+  assert.equal(delayed.note, '1st Day Mems − 1st New Mems');
+  assert.equal(delayed.status, undefined);
+  // The ones 88F does document still carry theirs.
+  assert.match(kpiOf(section, 'Verify% เฉลี่ย').note, /64\.8/);
+});
+
+// --- alerts and insights -----------------------------------------------------
+
+test('the overview raises the alerts the month actually earned', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const alerts = sectionOf(payload, 'overview').alerts;
+  const text = alerts.map((a) => a.text).join(' | ');
+
+  assert.match(text, /RTP เกิน 100%/);
+  assert.match(text, /Revenue ติดลบ/);
+  // 2 of 4 VIPs lost = 50% > the 40% warning threshold.
+  assert.match(text, /Lost VIP/);
+  assert.ok(alerts.some((a) => a.level === 'bad'), 'the VIP alert is the severe one');
+  assert.equal(alerts.some((a) => a.level === 'ok'), false, 'no all-clear when there are alerts');
+});
+
+test('a clean month gets an explicit all-clear rather than silence', async () => {
+  seed({
+    site: '88fed',
+    yearMonth: '2026-02',
+    fileType: 'daily_value',
+    rows: [
+      { Date: '2026-02-01', BIn: 100, R: 30, RTP: 0.95, DAU: 400, 'BIn Mems': 200, 'BIn Mems (np)': 180, 'New Mems': 20 },
+      { Date: '2026-02-02', BIn: 120, R: 35, RTP: 0.94, DAU: 410, 'BIn Mems': 210, 'BIn Mems (np)': 190, 'New Mems': 25 },
+    ],
+  });
+  const payload = await monthly.buildMonthlyPayload({ site: '88fed', yearMonth: '2026-02' });
+  const alerts = sectionOf(payload, 'overview').alerts;
+
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].level, 'ok');
+});
+
+test('insights are plain sentences with the real numbers in them', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  for (const section of payload.sections.filter((s) => s.available)) {
+    for (const line of section.insights) {
+      assert.equal(typeof line, 'string');
+      assert.ok(line.length > 20, `${section.id}: "${line}" is too short to say anything`);
+      assert.equal(/undefined|NaN|\[object/.test(line), false, `${section.id}: "${line}"`);
+    }
+  }
+});
+
+// --- per-section correctness -------------------------------------------------
+
+test('the overview reads VIP and deposit-count files, not just the daily export', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const overview = sectionOf(payload, 'overview');
+
+  assert.equal(kpiOf(overview, 'VIP ทั้งหมด').value, 4);
+  // (30 + 50 + 80 + 120 → no: 21+ only) 80 + 120 = 200 of 500 = 40%.
+  assert.equal(kpiOf(overview, 'Power User (21+ ครั้ง)').value, 40);
+});
+
+test('the overview still renders when its companion files are absent', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: '88fed', yearMonth: '2026-02' });
+  const overview = sectionOf(payload, 'overview');
+
+  assert.equal(overview.available, true, 'a missing VIP file must not blank the overview');
+  assert.equal(kpiOf(overview, 'VIP ทั้งหมด').value, null);
+  assert.match(kpiOf(overview, 'VIP ทั้งหมด').note, /ยังไม่ได้อัปโหลด/);
 });
 
 test('finance counts the days that actually lost money or over-paid players', async () => {
@@ -195,42 +362,62 @@ test('finance counts the days that actually lost money or over-paid players', as
   assert.equal(kpiOf(finance, 'วันที่ Revenue ติดลบ').value, 1);
   assert.equal(kpiOf(finance, 'วันที่ RTP > 100%').value, 2);
 
-  const best = finance.tables.find((table) => table.title.includes('สูงสุด'));
+  const best = tableTitled(finance, 'สูงสุด');
   assert.equal(best.rows[0].date, '2026-07-02');
   assert.equal(best.rows[0].R_THB, 40 * THB_FACTOR);
+
+  // The 100% mark is drawn, because "is this day above the line" is the whole
+  // question the RTP chart exists to answer.
+  assert.equal(chartOf(finance, 'finance-rtp').refLine.value, 100);
+  // Losing days are painted red rather than left the same colour as the rest.
+  assert.equal(chartOf(finance, 'finance-rbin').datasets[0].colorBySign, true);
 });
 
 test('activity reports the organic share as a ratio of head counts', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const activity = sectionOf(payload, 'activity');
   // (120 + 150 + 30) / (200 + 300 + 100) = 300/600 = 50%.
-  assert.equal(kpiOf(activity, 'สัดส่วน organic').value, 50);
-  assert.equal(kpiOf(activity, 'DAU สูงสุด').value, 600);
+  assert.equal(kpiOf(activity, 'สัดส่วน organic (np)').value, 50);
+  assert.equal(kpiOf(activity, 'DAU เฉลี่ย').note, 'ต่ำสุด 400 / สูงสุด 600');
 });
 
-test('new member reports Delayed 1st Deposit, which no export column carries', async () => {
+test('new member reports Delayed 1st Deposit and the funnel behind it', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const section = sectionOf(payload, 'new_member');
+
   // (8 - 3) + (14 - 8) = 11.
-  assert.equal(kpiOf(section, 'Delayed 1st Deposit รวม').value, 11);
-  // 5 + 9 = 14 file units of first-deposit money.
+  assert.equal(kpiOf(section, 'Delayed Depositors รวม').value, 11);
   assert.equal(kpiOf(section, 'ยอดฝากของ 1st New รวม').value, 14 * THB_FACTOR);
   assert.equal(kpiOf(section, 'Verify% เฉลี่ย').value, 75);
+  // New (Ref.) / New = 3 / 70 — head counts, the one ratio this may compute.
+  assert.ok(Math.abs(kpiOf(section, 'Referral Rate เฉลี่ย').value - 4.2857) < 0.001);
+
+  // Funnel: New → Verify → 1st New Mems → 1st Day Mems, each strictly the
+  // count of the stage before it that got further.
+  const funnel = chartOf(section, 'new-member-funnel');
+  assert.deepEqual(funnel.datasets[0].data, [70, 52, 11, 22]);
+  assert.equal(funnel.horizontal, true);
 });
 
 test('deposit-count segments sum to BIn Mems and the indices follow the reference', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const section = sectionOf(payload, 'deposit_count');
 
-  assert.equal(kpiOf(section, 'BIn Mems รวมทั้งเดือน').value, 500);
   // (30 + 50 + 80 + 120) / 500 = 56%.
   assert.ok(Math.abs(kpiOf(section, 'Power User Index').value - 56) < 0.001);
   // (40 + 60) / 500 = 20%.
-  assert.equal(kpiOf(section, 'Casual Rate').value, 20);
+  assert.equal(kpiOf(section, '1 Time (Casual)').value, 20);
 
   const table = section.tables[0];
   const shares = table.rows.reduce((total, row) => total + row.share, 0);
   assert.ok(Math.abs(shares - 100) < 0.001, `segment shares summed to ${shares}`);
+
+  // The daily chart is a share, not a head count, or the mix would appear to
+  // move whenever the size of the day moves.
+  const stack = chartOf(section, 'deposit-count-stack');
+  assert.equal(stack.stacked, true);
+  assert.equal(stack.datasets[0].unit, 'pct');
+  assert.equal(stack.datasets[0].data[0], 20);
 });
 
 test('brand/game share is money over money and flags RTP above 100%', async () => {
@@ -238,12 +425,18 @@ test('brand/game share is money over money and flags RTP above 100%', async () =
   const section = sectionOf(payload, 'brand_game');
 
   assert.equal(kpiOf(section, 'เกมที่ RTP > 100%').value, 1, 'LOTTO at 480%');
+  assert.equal(section.alerts.length, 1);
+  assert.equal(section.alerts[0].level, 'bad');
+  assert.match(section.alerts[0].text, /LOTTO/);
 
   const slot = section.tables[0].rows.find((row) => row.GameKind === 'SLOT');
   // 9000 / 10100 — the site factor cancels, so the share is unaffected by it.
   assert.ok(Math.abs(slot.share - 89.108) < 0.01, `SLOT share was ${slot.share}`);
   assert.equal(slot.CIn_THB, 9000 * THB_FACTOR);
-  assert.ok(Math.abs(slot.RTP_pct - 96.1) < 0.001);
+  assert.equal(slot._status.RTP_pct, 'good');
+
+  const lotto = section.tables[0].rows.find((row) => row.GameKind === 'LOTTO');
+  assert.equal(lotto._status.RTP_pct, 'bad');
 });
 
 test('VIP active/lost follows the file rule of 7 days since the last deposit', async () => {
@@ -253,59 +446,133 @@ test('VIP active/lost follows the file rule of 7 days since the last deposit', a
   assert.equal(kpiOf(section, 'VIP ทั้งหมด').value, 4);
   assert.equal(kpiOf(section, 'Active VIP').value, 2);
   assert.equal(kpiOf(section, 'Lost VIP').value, 2);
-  assert.equal(kpiOf(section, 'Active VIP%').value, 50);
+  // vip-members.md: 60.1% is the benchmark and below 55% is "re-engage ด่วน".
+  // 50% is under both, so this is the severe badge, not the middling one.
+  assert.equal(kpiOf(section, 'Active VIP').status, 'bad');
 
-  const lostTable = section.tables.find((table) => table.title.includes('Lost'));
+  // Top VIP is by Revenue, matching the table's own title.
+  const top = tableTitled(section, 'Top 10 VIP by Revenue');
+  assert.deepEqual(top.rows.map((row) => row.Username), ['carol', 'alice', 'bob', 'dave']);
+  const lostTable = tableTitled(section, 'Lost VIP');
   assert.deepEqual(lostTable.rows.map((row) => row.Username), ['carol', 'dave']);
 });
 
-test('the VIP tables never carry phone numbers off the workbook', async () => {
+test('the Lost VIP list carries the phone number, and only that list', async () => {
+  // vip-members.md names calling these members as the list's whole purpose, so
+  // the number is here — but nowhere else in the payload, and the table says
+  // out loud that the link should not be forwarded.
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const section = sectionOf(payload, 'vip');
-  for (const table of section.tables) {
-    assert.equal(
-      table.columns.some((column) => /phone|เบอร์/i.test(column.key + column.label)),
-      false,
-      'a token-addressable page must not publish contact details',
-    );
-    for (const row of table.rows) assert.equal('Phone' in row, false);
-  }
+
+  const lostTable = tableTitled(section, 'Lost VIP');
+  assert.ok(lostTable.columns.some((column) => column.key === 'Phone'));
+  assert.equal(lostTable.rows.find((row) => row.Username === 'carol').Phone, '0800000003');
+  // A VIP with no number on file reads as "—", not "undefined".
+  assert.equal(lostTable.rows.find((row) => row.Username === 'dave').Phone, '—');
+  assert.match(lostTable.note, /อย่าส่งลิงก์นี้ต่อ/);
+
+  const topTable = tableTitled(section, 'Top 10 VIP by Revenue');
+  assert.equal(topTable.columns.some((column) => column.key === 'Phone'), false);
+  for (const row of topTable.rows) assert.equal('Phone' in row, false);
 });
 
-test('referrer flags whoever was paid more than their downline returned', async () => {
+test('VIP breaks down which agent actually produced the VIPs', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const chart = chartOf(sectionOf(payload, 'vip'), 'vip-agent');
+
+  assert.deepEqual(chart.labels, ['agentA', 'agentB']);
+  assert.deepEqual(chart.datasets[0].data, [2, 2]);
+});
+
+test('referrer flags both kinds of abuse the reference describes', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const section = sectionOf(payload, 'referrer');
 
   assert.equal(kpiOf(section, 'Referrer ที่จ่ายแพงกว่าที่ได้').value, 1);
+  assert.equal(kpiOf(section, 'Referrer คุณภาพต่ำ').value, 1);
 
-  const rows = section.tables[0].rows;
-  const abuser = rows.find((row) => row.Referrer === 'promoter2');
-  // 20 / 500 — head counts only, because the export's `BIn Mems%` has no
-  // converted twin for this module to read.
-  assert.equal(abuser.binMemsPct, 4);
-  assert.equal(abuser['Ref Bonus_THB'], 40 * THB_FACTOR);
+  const lowQuality = tableTitled(section, 'ฝากจริงต่ำ');
+  // promoter2 only: 4% conversion on 500 recruits. `tiny` has a worse-looking
+  // 0% but only two recruits, which is noise, not a pattern.
+  assert.deepEqual(lowQuality.rows.map((row) => row.Referrer), ['promoter2']);
+  assert.equal(lowQuality.rows[0].binMemsPct, 4);
+  assert.equal(lowQuality.rows[0]['Ref Bonus_THB'], 40 * THB_FACTOR);
 });
 
-test('hours averages the weekday grid down to one figure per hour', async () => {
+test('referrer folds in the AD / Agent file when the month has one', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const section = sectionOf(payload, 'referrer');
+
+  const chart = chartOf(section, 'referrer-ad-agent');
+  assert.deepEqual(chart.labels, ['facebook', 'tiktok']);
+  assert.equal(chart.datasets[0].data[0], 90 * THB_FACTOR);
+  assert.match(joined(section), /facebook/);
+});
+
+test('referrer says what is missing when the AD / Agent file is absent', async () => {
+  seed({
+    site: '88fed',
+    yearMonth: '2026-05',
+    fileType: 'referrer',
+    rows: [{ Referrer: 'solo', 'Ref Bonus': 1, 'Total Mems': 10, 'Total BIn Mems': 5, BIn: 20, R: 4 }],
+  });
+  const payload = await monthly.buildMonthlyPayload({ site: '88fed', yearMonth: '2026-05' });
+  const section = sectionOf(payload, 'referrer');
+
+  assert.equal(section.available, true, 'the tab still works without the optional file');
+  assert.equal(chartOf(section, 'referrer-ad-agent'), undefined);
+  assert.match(joined(section), /ยังไม่ได้อัปโหลดไฟล์ AD \/ Agent/);
+  // And it is listed as worth uploading.
+  assert.ok(payload.missingFiles.some((entry) => entry.fileType === 'ad_agent'));
+});
+
+test('hours averages the weekday grid and pairs it with the head-count file', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const section = sectionOf(payload, 'hours');
 
-  assert.equal(kpiOf(section, 'ชั่วโมงที่เงินเข้าสูงสุด').value, 20);
-  assert.equal(kpiOf(section, 'ชั่วโมงที่เงียบที่สุด').value, 4);
+  assert.equal(kpiOf(section, 'ชั่วโมงที่เงินเข้าสูงสุด').value, '20:00');
+  assert.equal(kpiOf(section, 'ชั่วโมงที่เงียบที่สุด').value, '4:00');
 
-  const chart = section.charts[0];
-  assert.deepEqual(chart.labels, ['4', '20']);
+  const chart = chartOf(section, 'hours-avg');
+  assert.deepEqual(chart.labels, ['4:00', '20:00']);
   // (90 + 110) / 2 = 100 file units at hour 20.
   assert.equal(chart.datasets[0].data[1], 100 * THB_FACTOR);
+
+  // The sibling grid supplies "คนเฉลี่ย", which is what separates "lots of
+  // people" from "one whale" in a peak hour.
+  const peak = tableTitled(section, 'ช่วงพีค');
+  assert.ok(peak.columns.some((column) => column.key === 'avg_mems'));
+  assert.equal(peak.rows[0].weekday, 'Tuesday');
+  assert.equal(peak.rows[0].hour, '20:00');
+  assert.equal(peak.rows[0].avg_mems, 55);
+
+  const quiet = tableTitled(section, 'ช่วงเงียบ');
+  assert.equal(quiet.rows[0].weekday, 'Monday');
+  assert.equal(quiet.rows[0].hour, '4:00');
 });
 
-test('deposit detail rolls the daily rows back up per channel', async () => {
+test('hours drops the head-count column rather than showing an empty one', async () => {
+  seed({
+    site: '88fed',
+    yearMonth: '2026-01',
+    fileType: 'avg_bin_by_hour',
+    rows: [{ weekday: 'Monday', weekday_num: 1, hour: 20, avg_bin: 50 }],
+  });
+  const payload = await monthly.buildMonthlyPayload({ site: '88fed', yearMonth: '2026-01' });
+  const section = sectionOf(payload, 'hours');
+
+  const peak = tableTitled(section, 'ช่วงพีค');
+  assert.equal(peak.columns.some((column) => column.key === 'avg_mems'), false);
+  assert.match(joined(section), /ยังไม่ได้อัปโหลดไฟล์ Average BIn Mems/);
+});
+
+test('deposit detail rolls the daily rows back up per channel and flags the bad one', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const section = sectionOf(payload, 'deposit_detail');
 
   assert.equal(kpiOf(section, 'รายการฝากทั้งหมด').value, 250);
-  assert.equal(kpiOf(section, 'สำเร็จ').value, 205);
   assert.equal(kpiOf(section, 'อัตราสำเร็จรวม').value, 82);
+  assert.equal(kpiOf(section, 'อัตราสำเร็จรวม').status, 'bad');
 
   const rows = section.tables[0].rows;
   const kpay = rows.find((row) => row.PayName === 'k_pay');
@@ -313,31 +580,39 @@ test('deposit detail rolls the daily rows back up per channel', async () => {
   // the two daily rates.
   assert.equal(kpay.success_rate, 90);
   assert.equal(kpay.avg_duration_min, 3);
+  assert.equal(kpay._status.success_rate, 'warn');
+
+  const wave = rows.find((row) => row.PayName === 'wave_money');
+  assert.equal(wave._status.success_rate, 'bad');
+  assert.match(section.alerts[0].text, /wave_money/);
 });
 
 test('bonus totals points per type and never labels them as baht', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const section = sectionOf(payload, 'bonus');
 
-  assert.equal(kpiOf(section, 'Point ที่จ่ายรวม').value, 2800);
-  assert.equal(kpiOf(section, 'ประเภทที่กินงบมากสุด').value, 'Loyalty Point');
+  assert.equal(kpiOf(section, 'Point รวมที่จ่าย').value, 2800);
+  assert.equal(kpiOf(section, 'ประเภทที่กินงบสูงสุด').value, 'Loyalty Point');
 
   const loyalty = section.tables[0].rows.find((row) => row.Type === 'Loyalty Point');
   assert.equal(loyalty.total_points, 2500);
-  // Points are not money, so no column here may claim to be baht.
+  // Points are not money, so nothing here may claim to be baht.
   for (const column of section.tables[0].columns) assert.notEqual(column.unit, 'thb');
+  for (const kpi of section.kpis) assert.notEqual(kpi.unit, 'thb');
 });
 
-test('a missing file leaves its tab present, unavailable, and named', async () => {
-  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
-  // Nothing was seeded for member_referrer_detail — but every section this
-  // report declares does have a file, so the missing list is empty here.
-  assert.deepEqual(payload.missingFiles, []);
+// --- missing and broken files ------------------------------------------------
 
+test('a missing file leaves its tab present, unavailable, and named', async () => {
   // A month with only one file: the other ten tabs must still be there.
-  seed({ site: '88fed', yearMonth: '2026-06', fileType: 'vip', rows: [
-    { Username: 'solo', 'Last BIn 2 Y': 2, BIn: 500, R: 60, 'BIn Counts': 200, 'BIn Days': 90, 'Med. BIn': 12 },
-  ] });
+  seed({
+    site: '88fed',
+    yearMonth: '2026-06',
+    fileType: 'vip',
+    rows: [
+      { Username: 'solo', Agent: 'agentZ', 'Last BIn 2 Y': 2, BIn: 500, R: 60, 'BIn Counts': 200, 'BIn Days': 90, 'Med. BIn': 12 },
+    ],
+  });
 
   const sparse = await monthly.buildMonthlyPayload({ site: '88fed', yearMonth: '2026-06' });
   assert.equal(sparse.sections.length, 11);
@@ -348,8 +623,8 @@ test('a missing file leaves its tab present, unavailable, and named', async () =
 
   // Deduplicated: three sections read daily_value, and the operator only needs
   // to be told to upload it once.
-  const dailyValueMentions = sparse.missingFiles.filter((entry) => entry.fileType === 'daily_value');
-  assert.equal(dailyValueMentions.length, 1);
+  const mentions = sparse.missingFiles.filter((entry) => entry.fileType === 'daily_value');
+  assert.equal(mentions.length, 1);
 });
 
 test('a file present but unreadable is distinguished from one never uploaded', async () => {
@@ -369,8 +644,8 @@ test('a file present but unreadable is distinguished from one never uploaded', a
   assert.equal(overview.available, false);
   assert.match(overview.reason, /อ่านข้อมูลจากไฟล์ไม่ได้/);
   // Not listed as "never uploaded" — it is in the database, and telling someone
-  // to re-upload a file they already sent is the failure this distinction exists
-  // to prevent.
+  // to re-upload a file they already sent is the failure this distinction
+  // exists to prevent.
   assert.equal(payload.missingFiles.some((entry) => entry.fileType === 'daily_value'), false);
 });
 
@@ -379,6 +654,13 @@ test('a baht site says so instead of quoting an exchange rate', async () => {
   assert.equal(payload.currency.currency, 'THB');
   assert.equal(payload.currency.needsFxConversion, false);
   // The ×1,000 de-scaling still applies, so BIn 500 is ฿500,000.
-  const vip = sectionOf(payload, 'vip');
-  assert.equal(kpiOf(vip, 'ยอดฝากรวมของ VIP').value, 500 * 1000);
+  assert.equal(kpiOf(sectionOf(payload, 'vip'), 'BIn รวมทั้งกลุ่ม').value, 500 * 1000);
+});
+
+test('each file is read once even though several sections share it', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  // Eleven file types were seeded for this month and eleven sections were
+  // built from them — but overview/finance/activity all read daily_value and
+  // the overview reads three files, so this counts files, not section reads.
+  assert.equal(payload.fileCount, 11);
 });

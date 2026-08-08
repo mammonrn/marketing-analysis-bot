@@ -1,9 +1,10 @@
 /* Monthly dashboard renderer.
  *
- * Generic on purpose: it knows about `kpis`, `charts` and `tables` and about
- * the unit tags the payload puts on each figure, and about nothing else. Every
- * casino metric lives in `src/session/monthlyReport.js`, so adding a section
- * there needs no change here.
+ * Generic on purpose: it knows about `alerts`, `kpis`, `charts`, `tables` and
+ * `insights`, and about the unit tags the payload puts on each figure, and
+ * about nothing else. Every casino metric, benchmark and threshold lives in
+ * `src/session/monthlyReport.js`, so adding a section there needs no change
+ * here.
  *
  * Nothing in the payload is ever inserted as markup — values go in through
  * textContent — so a username or a PayName out of an uploaded workbook cannot
@@ -69,13 +70,12 @@
   var NUMERIC_UNITS = { thb: 1, pct: 1, count: 1, number: 1, min: 1 };
 
   var THAI_MONTHS = [
-    'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
-    'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.',
+    'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+    'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม',
   ];
 
-  /* `2026-07` → `ก.ค. 2026`. Formatted here rather than in the payload so the
-     builder stays a data module — and it has to match what the chat message
-     said, or the page looks like it opened a different month. */
+  /* `2026-07` → `กรกฎาคม 2026`. Formatted here rather than in the payload so
+     the builder stays a data module. */
   function monthLabel(yearMonth) {
     var match = /^(\d{4})-(\d{2})$/.exec(String(yearMonth || ''));
     if (!match) return String(yearMonth || '');
@@ -85,6 +85,15 @@
 
   // --- pieces ----------------------------------------------------------------
 
+  function renderAlerts(alerts) {
+    if (!alerts || !alerts.length) return null;
+    var box = el('div');
+    alerts.forEach(function (item) {
+      box.appendChild(el('div', 'alert alert-' + (item.level || 'warn'), item.text));
+    });
+    return box;
+  }
+
   function renderKpis(kpis) {
     if (!kpis || !kpis.length) return null;
 
@@ -93,10 +102,12 @@
     var grid = el('div', 'kpis');
 
     kpis.forEach(function (kpi) {
-      var cell = el('div');
+      var cell = el('div', 'kpi');
       cell.appendChild(el('div', 'kpi-label', kpi.label));
-      cell.appendChild(el('div', 'kpi-value', formatValue(kpi.value, kpi.unit)));
-      if (kpi.hint) cell.appendChild(el('div', 'kpi-hint', kpi.hint));
+      cell.appendChild(
+        el('div', 'kpi-value' + (kpi.status ? ' is-' + kpi.status : ''), formatValue(kpi.value, kpi.unit)),
+      );
+      if (kpi.note) cell.appendChild(el('div', 'kpi-note', kpi.note));
       grid.appendChild(cell);
     });
 
@@ -104,14 +115,54 @@
     return card;
   }
 
+  function renderInsights(insights) {
+    if (!insights || !insights.length) return null;
+    var card = el('section');
+    card.appendChild(el('h2', null, 'Key Insights'));
+    var list = el('ul', 'insights');
+    insights.forEach(function (line) {
+      list.appendChild(el('li', null, line));
+    });
+    card.appendChild(list);
+    return card;
+  }
+
   /* Categorical palette: distinct hues at similar lightness so no series reads
      as more important than another, and all stay legible on light or dark.
      Same set as the session dashboard, so the two pages look like one product. */
   var PALETTE = ['#3b7dd8', '#e08a3c', '#3aa675', '#b45fc4', '#d4576a', '#4aa3c4'];
+  var GOOD = '#3aa675';
+  var WARN = '#e08a3c';
+  var BAD = '#d4576a';
 
   function cssVar(name, fallback) {
     var value = getComputedStyle(document.documentElement).getPropertyValue(name);
     return (value && value.trim()) || fallback;
+  }
+
+  /* Per-bar colouring, for the three cases where one colour for the series
+     would hide the point of the chart: a negative-profit day, a payment channel
+     below threshold, and a funnel whose stages are different things. */
+  function barColors(set, spec, fallback) {
+    if (set.colorBySign) {
+      return set.data.map(function (v) {
+        return v >= 0 ? GOOD : BAD;
+      });
+    }
+    if (set.colorByThreshold) {
+      return set.data.map(function (v) {
+        if (v === null) return fallback;
+        if (v >= set.colorByThreshold.good) return GOOD;
+        if (v >= set.colorByThreshold.warn) return WARN;
+        return BAD;
+      });
+    }
+    if (set.colorByIndex) {
+      return spec.labels.map(function (_, i) {
+        return PALETTE[i % PALETTE.length];
+      });
+    }
+    return null;
   }
 
   function renderChart(spec) {
@@ -124,6 +175,9 @@
 
     var scroll = el('div', 'scroll-x');
     var box = el('div', 'chart-box');
+    /* A horizontal bar chart needs room per row, or 12 payment channels get
+       6px each and no label is readable. */
+    if (spec.horizontal) box.style.height = Math.max(220, spec.labels.length * 30 + 60) + 'px';
     var canvas = document.createElement('canvas');
     box.appendChild(canvas);
     scroll.appendChild(box);
@@ -146,17 +200,58 @@
           borderWidth: 0,
         };
       }
+
+      var type = set.chartType || spec.type || 'bar';
+      var custom = barColors(set, spec, color);
       return {
+        type: type,
         label: set.label,
         data: set.data,
-        backgroundColor: spec.type === 'line' ? color + '26' : color,
-        borderColor: color,
+        backgroundColor: custom || (type === 'line' ? color + '26' : color),
+        borderColor: custom ? undefined : color,
         borderWidth: 2,
         tension: 0.3,
         pointRadius: spec.labels.length > 20 ? 0 : 3,
-        fill: spec.type === 'line' && spec.datasets.length === 1,
+        fill: type === 'line' && spec.datasets.length === 1 && !spec.refLine,
+        order: type === 'line' ? 1 : 2,
       };
     });
+
+    /* A flat reference line — the 100% RTP mark, where above means the casino
+       paid out more than it took in. Drawn as a dashed dataset because that
+       needs no plugin. */
+    if (spec.refLine) {
+      datasets.push({
+        type: 'line',
+        label: spec.refLine.label || 'อ้างอิง',
+        data: spec.labels.map(function () {
+          return spec.refLine.value;
+        }),
+        borderColor: BAD,
+        borderDash: [5, 5],
+        borderWidth: 1,
+        pointRadius: 0,
+        fill: false,
+      });
+    }
+
+    var valueAxis = {
+      ticks: {
+        color: muted,
+        callback: function (v) {
+          return formatValue(v, unit);
+        },
+      },
+      grid: { color: muted + '33' },
+      stacked: !!spec.stacked,
+    };
+    if (spec.maxValue !== undefined) valueAxis.max = spec.maxValue;
+
+    var categoryAxis = {
+      ticks: { color: muted, maxRotation: 0, autoSkip: !spec.horizontal },
+      grid: { display: false },
+      stacked: !!spec.stacked,
+    };
 
     var chart = new Chart(canvas, {
       type: spec.type || 'bar',
@@ -164,6 +259,7 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        indexAxis: spec.horizontal ? 'y' : 'x',
         interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: {
@@ -173,7 +269,11 @@
           tooltip: {
             callbacks: {
               label: function (item) {
-                var v = item.parsed.y !== undefined ? item.parsed.y : item.parsed;
+                var v = spec.horizontal
+                  ? item.parsed.x
+                  : item.parsed.y !== undefined
+                    ? item.parsed.y
+                    : item.parsed;
                 var setUnit = spec.datasets[item.datasetIndex]
                   ? spec.datasets[item.datasetIndex].unit || unit
                   : unit;
@@ -184,18 +284,9 @@
         },
         scales: isRound
           ? {}
-          : {
-              x: { ticks: { color: muted, maxRotation: 0, autoSkip: true }, grid: { display: false } },
-              y: {
-                ticks: {
-                  color: muted,
-                  callback: function (v) {
-                    return formatValue(v, unit);
-                  },
-                },
-                grid: { color: muted + '33' },
-              },
-            },
+          : spec.horizontal
+            ? { x: valueAxis, y: categoryAxis }
+            : { x: categoryAxis, y: valueAxis },
       },
     });
 
@@ -211,6 +302,7 @@
 
     if (!spec.rows || !spec.rows.length) {
       card.appendChild(el('div', 'empty-state', 'ไม่มีข้อมูลในตารางนี้'));
+      if (spec.note) card.appendChild(el('div', 'note', spec.note));
       return card;
     }
 
@@ -220,8 +312,7 @@
     var thead = el('thead');
     var headRow = el('tr');
     spec.columns.forEach(function (column) {
-      var th = el('th', NUMERIC_UNITS[column.unit] ? 'num' : null, column.label);
-      headRow.appendChild(th);
+      headRow.appendChild(el('th', NUMERIC_UNITS[column.unit] ? 'num' : null, column.label));
     });
     thead.appendChild(headRow);
     table.appendChild(thead);
@@ -230,9 +321,18 @@
     spec.rows.forEach(function (row) {
       var tr = el('tr');
       spec.columns.forEach(function (column) {
-        tr.appendChild(
-          el('td', NUMERIC_UNITS[column.unit] ? 'num' : null, formatValue(row[column.key], column.unit)),
-        );
+        var td = el('td', NUMERIC_UNITS[column.unit] ? 'num' : null);
+        /* `_status` lets the builder flag one cell of a row — an RTP over
+           100%, a payment channel below threshold — without the renderer
+           knowing what any of those mean. */
+        var status = row._status && row._status[column.key];
+        if (status) {
+          var tag = el('span', 'tag is-' + status, formatValue(row[column.key], column.unit));
+          td.appendChild(tag);
+        } else {
+          td.textContent = formatValue(row[column.key], column.unit);
+        }
+        tr.appendChild(td);
       });
       tbody.appendChild(tr);
     });
@@ -260,12 +360,17 @@
         el(
           'div',
           'empty-state',
-          (section.reason || 'ไม่มีข้อมูล') + ' — ไฟล์ที่ต้องใช้: ' + (section.fileLabel || section.fileType),
+          (section.reason || 'ไม่มีข้อมูล') +
+            ' — ไฟล์ที่ต้องใช้: ' +
+            (section.fileLabel || section.fileType),
         ),
       );
       panelEl.appendChild(card);
       return;
     }
+
+    var alerts = renderAlerts(section.alerts);
+    if (alerts) panelEl.appendChild(alerts);
 
     var kpiCard = renderKpis(section.kpis);
     if (kpiCard) panelEl.appendChild(kpiCard);
@@ -280,6 +385,9 @@
       if (card) panelEl.appendChild(card);
     });
 
+    var insightCard = renderInsights(section.insights);
+    if (insightCard) panelEl.appendChild(insightCard);
+
     if (!panelEl.firstChild) {
       var blank = el('section');
       blank.appendChild(el('h2', null, section.title));
@@ -291,7 +399,7 @@
   function buildTabs(sections) {
     var buttons = [];
 
-    sections.forEach(function (section, index) {
+    sections.forEach(function (section) {
       var button = el('button', 'tab' + (section.available ? '' : ' empty'), section.title);
       button.type = 'button';
       button.setAttribute('role', 'tab');
@@ -302,12 +410,16 @@
         });
         button.setAttribute('aria-selected', 'true');
         showSection(section);
-        /* Keep the tapped tab visible when the strip is scrolled. */
+
+        /* Scroll the toolbar to the top, not the panel: the toolbar is sticky,
+           so putting the panel at the top of the viewport puts its first card
+           underneath it. Landing the toolbar there leaves the panel starting
+           exactly below the tabs. */
+        tabsEl.scrollIntoView({ block: 'start' });
         button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       });
       buttons.push(button);
       tabsEl.appendChild(button);
-      if (index === 0) button.setAttribute('aria-selected', 'true');
     });
 
     return buttons;
@@ -319,43 +431,49 @@
       return;
     }
 
-    document.getElementById('title').textContent =
-      'สรุปเดือน ' + monthLabel(payload.yearMonth) + ' — ' + (payload.siteName || '');
-    document.title = 'สรุปเดือน ' + monthLabel(payload.yearMonth);
+    var heading = (payload.siteName || '') + ' — รายงานภาพรวมธุรกิจ';
+    document.getElementById('title').textContent = heading;
+    document.getElementById('month-badge').textContent = monthLabel(payload.yearMonth);
+    document.title = heading + ' ' + monthLabel(payload.yearMonth);
+
+    var sections = payload.sections || [];
+    var ready = sections.filter(function (section) {
+      return section.available;
+    });
+    document.getElementById('meta-files').textContent =
+      '📊 อ่านจากไฟล์ Power BI ' + (payload.fileCount || 0) + ' ไฟล์ · ' +
+      'หมวดที่มีข้อมูล ' + ready.length + '/' + sections.length;
 
     if (payload.currency) {
       var c = payload.currency;
       document.getElementById('meta-currency').textContent = c.needsFxConversion
-        ? 'สกุลเงิน ' + c.currency + ' → THB (อัตรา ' + c.fxRate + ' ณ ' + c.fxRateAsOf + ')'
-        : 'สกุลเงิน ' + c.currency + ' (เป็นบาทอยู่แล้ว)';
+        ? '💰 หน่วยเงิน: บาท (แปลงจาก ' + c.currency + ' อัตรา ' + c.fxRate + ' ณ ' + c.fxRateAsOf +
+          ', คูณกลับ ' + c.scaleFactor.toLocaleString('en-US') + ' ที่ Power BI ตัดไว้)'
+        : '💰 หน่วยเงิน: บาท (' + c.currency + ' อยู่แล้ว, คูณกลับ ' +
+          c.scaleFactor.toLocaleString('en-US') + ' ที่ Power BI ตัดไว้)';
     }
 
     if (payload.generatedAt) {
-      document.getElementById('meta-time').textContent = new Date(
-        payload.generatedAt,
-      ).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' });
+      document.getElementById('meta-time').textContent =
+        '🕒 สร้างเมื่อ ' +
+        new Date(payload.generatedAt).toLocaleString('th-TH', {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        });
     }
 
-    var sections = payload.sections || [];
     if (!sections.length) {
       fail('ไม่มีข้อมูลในเดือนนี้');
       return;
     }
 
-    buildTabs(sections);
+    var buttons = buildTabs(sections);
     /* Open on the first tab that actually has something in it, so a month
        missing its Daily Value file does not greet the user with an empty page. */
-    var first = sections.filter(function (section) {
-      return section.available;
-    })[0];
-    if (first) {
-      var index = sections.indexOf(first);
-      tabsEl.children[0].setAttribute('aria-selected', 'false');
-      tabsEl.children[index].setAttribute('aria-selected', 'true');
-      showSection(first);
-    } else {
-      showSection(sections[0]);
-    }
+    var first = ready[0] || sections[0];
+    var index = sections.indexOf(first);
+    buttons[index].setAttribute('aria-selected', 'true');
+    showSection(first);
 
     if (payload.missingFiles && payload.missingFiles.length) {
       var list = document.getElementById('missing-list');
