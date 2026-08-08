@@ -40,16 +40,21 @@ const raw = JSON.parse(fs.readFileSync(ALIASES_PATH, 'utf8'));
  * `pointsScaleFactor` is the same idea for a different export. The point logs
  * (`bonus.xlsx`, `reward point.xlsx`, `other transfer.xlsx`) do not carry the
  * ×1,000 de-scaling the Power BI money columns do — SH666's `Points` column
- * is scaled by 100,000, so a raw `1.200` is 120,000 MMK, not 1,200. Reading
- * it with `scaleFactor` understates the figure a hundredfold, and reading it
- * raw understates it by 100,000x, which is what "Loyalty Point รวม 278.8"
- * was.
+ * has a scale of its own, so a raw `1.200` is 120 MMK, not 1.2 and not 1,200.
+ * Reading it raw is what produced "Loyalty Point รวม 278.8" for a figure that
+ * is really two orders of magnitude larger.
  *
- * Unlike `scaleFactor` it is deliberately *optional*: only SH666's scale has
- * been verified against a real file. A site with no value declared has no
- * default — see `aggregateBonusLog`, which refuses to guess. Borrowing
- * SH666's number for U89/88F would be the same mistake as the old fused
- * `moneyFactor`: a figure that looks authoritative with nothing behind it.
+ * PROVISIONAL: SH666's 100 has been stated by the operator but has *not* been
+ * checked against a Power BI screenshot, and it has moved before (100,000 was
+ * carried here until this commit). Treat it as the current best answer, not as
+ * settled — and when it is finally confirmed, this is the one line to change.
+ *
+ * Unlike `scaleFactor` it is deliberately *optional*: no other site has a
+ * value at all. A site with no value declared has no default — see
+ * `aggregateBonusLog`, which refuses to guess. Borrowing SH666's number for
+ * U89/88F would be the same mistake as the old fused `moneyFactor`: a figure
+ * that looks authoritative with nothing behind it. That the number itself is
+ * still unconfirmed is the strongest argument for not spreading it around.
  */
 function describeSite(canonical, entry) {
   const { scaleFactor, fxRate, pointsScaleFactor } = entry;

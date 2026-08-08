@@ -60,9 +60,9 @@ function depositDetailWorkbook(rowCount) {
 }
 
 /**
- * A point log, whose `Points` column is on the ×100,000 scale. Every row is
- * the real SH666 value this change was reported against: raw 1.200 = 120,000
- * MMK.
+ * A point log, whose `Points` column is on the `pointsScaleFactor` scale
+ * rather than the ÷1,000 one. Every row carries the SH666 value this change
+ * was reported against: raw 1.200.
  */
 function bonusLogWorkbook(rowCount) {
   const aoa = [['AddTime', 'Type', 'Username', 'Lv', 'Points', 'Memo']];
@@ -269,7 +269,8 @@ test('worker and inline point logs agree, including after an fx change', async (
   // be using the config's 0.787 — the same file converting two ways depending
   // on its size.
   assert.deepEqual(viaWorker, inline);
-  assert.ok(Math.abs(viaWorker[0].total_points_THB - viaWorker[0].total_points * 100_000 * 0.812) < 1e-6);
+  const expected = viaWorker[0].total_points * SITES.shwe666.pointsScaleFactor * 0.812;
+  assert.ok(Math.abs(viaWorker[0].total_points_THB - expected) < 1e-6);
 });
 
 test('a point log for a site with no configured scale rejects rather than converting', async () => {

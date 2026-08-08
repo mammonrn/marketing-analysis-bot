@@ -97,12 +97,17 @@ test('aggregateBonusLog counts a row even when its Points cell is unreadable', (
 /**
  * The regression this whole change exists for.
  *
- * Confirmed against SH666's own `reward_point.xlsx` for 2026-07: the "Money
- * Daily" row reads 1.200 in the file and is 120,000 MMK in reality. Reading
- * the column raw is what produced "Loyalty Point รวม 278.8" for a figure in
- * the tens of millions of kyat.
+ * SH666's `reward_point.xlsx` for 2026-07: the "Money Daily" row reads 1.200
+ * in the file and is 120 MMK in reality. Reading the column raw is what
+ * produced "Loyalty Point รวม 278.8" for a figure two orders of magnitude
+ * larger.
+ *
+ * The scale itself is still provisional (see `sites.js`) — it has been stated
+ * but not checked against Power BI, and it has moved before. These two tests
+ * are written so that a future correction changes the expected numbers here
+ * and nowhere else in this file.
  */
-test('a raw Points value of 1.200 is 120,000 MMK before any fx conversion', (t) => {
+test('a raw Points value of 1.200 is 120 MMK before any fx conversion', (t) => {
   t.after(clearFxOverrides);
   // fxRate 1 isolates the point scale from the currency step, so this asserts
   // the MMK figure itself rather than inferring it back out of a baht number.
@@ -114,20 +119,23 @@ test('a raw Points value of 1.200 is 120,000 MMK before any fx conversion', (t) 
   );
 
   assert.equal(out[0].total_points, 1.2, 'the raw column must survive untouched');
-  assert.equal(out[0].total_points_THB, 120_000);
+  assert.equal(out[0].total_points_THB, 120);
 });
 
-test('120,000 MMK then converts to baht at the site rate', () => {
+test('120 MMK then converts to baht at the site rate', () => {
   const out = aggregateBonusLog(
     [{ AddTime: '2026-07-15', Type: 'Money Daily', Points: 1.2 }],
     { site: SH666 },
   );
 
   const { pointsScaleFactor, fxRate } = SITES[SH666];
-  assert.equal(pointsScaleFactor, 100_000);
-  // 1.2 × 100,000 × 0.787 = 94,440.
-  assert.equal(out[0].total_points_THB, 1.2 * pointsScaleFactor * fxRate);
-  assert.ok(Math.abs(out[0].total_points_THB - 94_440) < 1e-6);
+  assert.equal(pointsScaleFactor, 100);
+  // 1.2 × 100 × 0.787 = 94.44. Tolerance rather than strict equality for the
+  // same reason as the fx-change test below: the code combines the scale and
+  // the rate in the other order, and whether that lands on the same float
+  // depends on the scale itself.
+  assert.ok(Math.abs(out[0].total_points_THB - 1.2 * pointsScaleFactor * fxRate) < 1e-9);
+  assert.ok(Math.abs(out[0].total_points_THB - 94.44) < 1e-6);
 });
 
 test('aggregateBonusLog keeps the raw sum alongside the converted one', () => {
@@ -157,7 +165,7 @@ test('the converted column uses the _THB spelling query.js pairs and labels', ()
 
 test('a site with no pointsScaleFactor refuses to guess one', () => {
   // U89/88F have no verified scale, so their point logs must fail loudly
-  // rather than borrow SH666's 100,000 — the failure mode the old fused
+  // rather than borrow SH666's scale — the failure mode the old fused
   // `moneyFactor` taught this codebase to fear.
   for (const site of ['ubet89', '88fed']) {
     assert.equal(SITES[site].pointsFactor, null, `${site} must not have a guessed factor`);
@@ -185,7 +193,19 @@ test('a runtime fx change moves the converted points with it', (t) => {
   const atNewRate = aggregateBonusLog(rows, { site: SH666 })[0].total_points_THB;
 
   assert.notEqual(atNewRate, atConfigRate);
-  assert.equal(atNewRate, 1.2 * 100_000 * 0.812);
+  // Reads the scale from config: the claim here is that the *rate* moved, and
+  // it should keep holding when the point scale is finally confirmed.
+  //
+  // Compared with a tolerance because the code multiplies by the pre-combined
+  // `pointsFactor` (scale × rate) while this line associates the other way —
+  // the two differ in the last bit, and which way it lands depends on the
+  // scale in config. Pinning an exact float here would make an unrelated
+  // change to that value look like a conversion bug.
+  const expected = 1.2 * SITES[SH666].pointsScaleFactor * 0.812;
+  assert.ok(
+    Math.abs(atNewRate - expected) < 1e-9,
+    `expected ${atNewRate} ≈ ${expected}`,
+  );
 });
 
 function hourPivotBuffer(measureLabel) {

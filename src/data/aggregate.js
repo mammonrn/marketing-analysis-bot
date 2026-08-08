@@ -92,18 +92,18 @@ export function aggregateDepositDetail(rows, { onProgress } = {}) {
  * why it cannot.
  *
  * The point logs are the one export where the raw cell is not on the same
- * scale as the money columns: SH666 writes `Points` scaled by 100,000, so a
- * raw `1.200` is 120,000 MMK. Summing the raw column and calling the result
+ * scale as the money columns: SH666's `Points` column carries its own scale,
+ * so a raw `1.200` is 120 MMK. Summing the raw column and calling the result
  * an amount — which is what this function exists to stop — is how "Loyalty
- * Point รวม 278.8" came to be reported for a figure that was really tens of
- * millions of kyat.
+ * Point รวม 278.8" came to be reported for a figure two orders of magnitude
+ * larger.
  *
  * A site with no `pointsScaleFactor` throws rather than borrowing SH666's.
- * The scale has only ever been checked against SH666's own file; whether
- * U89/88F share it is unknown, and a wrong factor here is invisible in a way
- * a missing file is not — the numbers still look like numbers. This is the
- * same failure the fused `moneyFactor` produced (see `sites.js`), and the
- * only defence that works is refusing to produce a figure at all.
+ * Whether U89/88F share SH666's scale is unknown, and a wrong factor here is
+ * invisible in a way a missing file is not — the numbers still look like
+ * numbers. This is the same failure the fused `moneyFactor` produced (see
+ * `sites.js`), and the only defence that works is refusing to produce a
+ * figure at all. SH666's own value is still provisional; see `sites.js`.
  */
 function requirePointsFactor(siteInput) {
   const site = getSite(siteInput);
