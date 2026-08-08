@@ -280,6 +280,10 @@ export async function parsePivotSheet(source, { valueKey = 'avg_bin' } = {}) {
  * `'year-month'` returns only a `{ '2026-07': 1234 }` tally of the months
  * found in `dateColumn` — which is all `ingest.js` needs to date a file.
  *
+ * `site` is only consulted by the aggregate step, and only by the point-log
+ * aggregator, which needs the site's `Points` scale to convert. It is
+ * optional for every other shape and file type.
+ *
  * `onProgress` reports phases. The read itself is one opaque SheetJS call
  * with no way to observe partial progress, so that phase only announces that
  * it started; the aggregate loop is ours and does report row counts.
@@ -288,6 +292,7 @@ export async function readAndShapeRows({
   filePath,
   buffer,
   fileType,
+  site,
   shape = 'typed',
   dateColumn,
   onProgress,
@@ -342,7 +347,12 @@ export async function readAndShapeRows({
   }
 
   if (type?.aggregate) {
+    // `site` reaches the aggregators because the point logs need the site's
+    // scale to convert their `Points` column, and this is the last step that
+    // still has the rows in hand. `aggregateDepositDetail` ignores it — its
+    // output is counts and durations, with no money in it.
     return type.aggregate(rows, {
+      site,
       onProgress: (processed, total) => onProgress?.({ phase: 'aggregating', processed, total }),
     });
   }

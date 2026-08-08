@@ -55,6 +55,34 @@ test('moneyFactor is derived from scaleFactor × fxRate, not stored', () => {
   assert.equal(SITES.shwe666.needsFxConversion, true);
 });
 
+test('pointsScaleFactor is separate from scaleFactor, not a rename of it', () => {
+  // The point logs carry their own scale: SH666's `Points` column is ÷100,000
+  // where its money columns are ÷1,000. Fusing the two is the bug.
+  assert.equal(SITES.shwe666.scaleFactor, 1000);
+  assert.equal(SITES.shwe666.pointsScaleFactor, 100000);
+  assert.equal(SITES.shwe666.pointsFactor, 100000 * 0.787);
+});
+
+test('pointsFactor is derived from pointsScaleFactor × fxRate, not stored', () => {
+  for (const site of Object.values(SITES)) {
+    if (site.pointsScaleFactor === undefined) continue;
+    assert.equal(
+      site.pointsFactor,
+      site.pointsScaleFactor * site.fxRate,
+      `${site.canonical} pointsFactor must equal pointsScaleFactor × fxRate`,
+    );
+  }
+});
+
+test('a site with no verified point scale reports null rather than a default', () => {
+  // Only SH666's scale has been checked against a real file. `null` is what
+  // makes `aggregateBonusLog` throw instead of quietly reusing 100,000.
+  assert.equal(SITES.ubet89.pointsFactor, null);
+  assert.equal(SITES['88fed'].pointsFactor, null);
+  assert.equal(SITES.ubet89.pointsScaleFactor, undefined);
+  assert.equal(SITES['88fed'].pointsScaleFactor, undefined);
+});
+
 test('every site declares a currency, an fxRate and the date it was taken', () => {
   for (const site of Object.values(SITES)) {
     assert.ok(site.currency, `${site.canonical} must name its source currency`);

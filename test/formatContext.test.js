@@ -253,6 +253,31 @@ test('a THB site is not told about an exchange rate it does not have', () => {
   assert.ok(text.includes('"BIn_THB":1000000'));
 });
 
+test('a point-log context is told the Points scale, not the ×1,000 one', () => {
+  // The generic block says "จำนวนเงินในไฟล์ถูกตัด 3 ศูนย์ไว้ ... × 1,000 × 0.787",
+  // which is not true of `Points`. Left unqualified, the model reading a
+  // bonus_log context has the wrong factor for the only money column in it.
+  const rows = [
+    dbRow({ Date: '2026-07-01', Type: 'Money Daily', total_points: 1.2, total_points_THB: 94440 },
+      { rowDate: '2026-07-01' }),
+  ];
+  const text = context(rows, { fileType: 'bonus_log', site: 'shwe666' });
+
+  assert.match(text, /point log/);
+  assert.match(text, /100,000 เท่า/);
+  // The exact figure the user reported the bug against.
+  assert.match(text, /ค่าดิบ 1\.200 = 120,000 MMK/);
+  assert.match(text, /`total_points_THB` คือค่าที่คูณ 100,000/);
+  assert.match(text, /`total_points` คือผลรวมค่าดิบ/);
+});
+
+test('a non-point-log context is not given the points note', () => {
+  const rows = [dbRow({ Date: '2026-07-01', BIn: 1000 }, { rowDate: '2026-07-01' })];
+  const text = context(rows, { fileType: 'daily_value', site: 'shwe666' });
+
+  assert.ok(!/point log/.test(text), 'the points scale applies to the point logs only');
+});
+
 test('in the stats block the converted column leads its raw twin, both labelled', () => {
   const rows = Array.from({ length: 45 }, (_, i) =>
     dbRow({ Username: `u${i}`, BIn: 1000 + (i % 7), DAU: 470 }),
