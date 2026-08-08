@@ -1050,18 +1050,19 @@ const SECTIONS = [
             columns: [
               { key: 'Username', label: 'Username', unit: TEXT },
               { key: 'BIn_THB', label: 'ยอดฝากรวม', unit: THB },
+              { key: 'R_THB', label: 'Revenue', unit: THB },
+              { key: 'BIn Days', label: 'วันที่ฝาก', unit: COUNT },
               { key: 'Last BIn 2 Y', label: 'หายไปกี่วัน', unit: COUNT },
-              { key: 'Phone', label: 'โทร', unit: TEXT },
             ],
-            // Phone is here because the report this page replaces has it and
-            // vip-members.md names calling these members as the list's purpose.
-            // It is the only contact detail anywhere in the payload, and it
-            // rides the same one-hour single-chat token as everything else.
-            rows: topBy(lost, 'BIn_THB').map((record) => ({
-              ...vipRow(record),
-              Phone: String(record.Phone ?? '').trim() || '—',
-            })),
-            note: 'รายชื่อสำหรับทีม CRM ติดต่อกลับ — มีเบอร์โทรของลูกค้า อย่าส่งลิงก์นี้ต่อออกนอกทีม',
+            // Username only, never `Phone`. The workbook has the number and
+            // the report this page replaces printed it, but a phone number on
+            // a page reachable by URL is a different kind of exposure from a
+            // deposit total — the URL can be forwarded, screenshotted or left
+            // open, and nothing downstream of here could take it back. The
+            // username is enough to look the member up in the admin panel,
+            // which is where contact details belong.
+            rows: topBy(lost, 'BIn_THB').map(vipRow),
+            note: 'รายชื่อสำหรับทีม CRM — เปิดเบอร์โทรจาก username ในระบบหลังบ้าน หน้านี้ไม่แสดงข้อมูลติดต่อ',
           },
         ],
         insights,

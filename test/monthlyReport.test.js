@@ -457,23 +457,53 @@ test('VIP active/lost follows the file rule of 7 days since the last deposit', a
   assert.deepEqual(lostTable.rows.map((row) => row.Username), ['carol', 'dave']);
 });
 
-test('the Lost VIP list carries the phone number, and only that list', async () => {
-  // vip-members.md names calling these members as the list's whole purpose, so
-  // the number is here — but nowhere else in the payload, and the table says
-  // out loud that the link should not be forwarded.
+test('no phone number reaches the payload, from any section', async () => {
+  // The VIP workbook has `Phone` on every row and the report this page
+  // replaces printed it in the Lost VIP list. It must not appear here: the
+  // page is reachable by URL, and a forwarded link is not something this code
+  // can take back. Asserted over the whole serialised payload rather than the
+  // one table, so a future section cannot quietly reintroduce it.
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
-  const section = sectionOf(payload, 'vip');
 
-  const lostTable = tableTitled(section, 'Lost VIP');
-  assert.ok(lostTable.columns.some((column) => column.key === 'Phone'));
-  assert.equal(lostTable.rows.find((row) => row.Username === 'carol').Phone, '0800000003');
-  // A VIP with no number on file reads as "—", not "undefined".
-  assert.equal(lostTable.rows.find((row) => row.Username === 'dave').Phone, '—');
-  assert.match(lostTable.note, /อย่าส่งลิงก์นี้ต่อ/);
+  // Every number seeded onto a VIP row. Checked against the serialised
+  // payload, so it catches a leak through a chart label or an insight
+  // sentence as well as through a table cell.
+  const serialised = JSON.stringify(payload);
+  for (const seeded of ['0800000001', '0800000002', '0800000003']) {
+    assert.equal(serialised.includes(seeded), false, `phone ${seeded} leaked`);
+  }
 
-  const topTable = tableTitled(section, 'Top 10 VIP by Revenue');
-  assert.equal(topTable.columns.some((column) => column.key === 'Phone'), false);
-  for (const row of topTable.rows) assert.equal('Phone' in row, false);
+  // Structural, so a future section cannot reintroduce the column under a
+  // different table. Prose is exempt: the Lost VIP note says the words
+  // "เบอร์โทร" on purpose, to point at where the number actually lives.
+  for (const section of payload.sections.filter((s) => s.available)) {
+    for (const table of section.tables) {
+      const where = `${section.id}: ${table.title}`;
+      for (const column of table.columns) {
+        assert.equal(/phone|เบอร์|โทร|mobile|tel/i.test(column.key), false, `${where} column key`);
+        assert.equal(/phone|เบอร์|โทร|mobile|tel/i.test(column.label), false, `${where} column label`);
+      }
+      for (const row of table.rows) {
+        assert.equal('Phone' in row, false, where);
+        // Nothing that merely looks like a number someone could dial. Dates
+        // are the one long digit string that legitimately appears in a cell.
+        for (const value of Object.values(row)) {
+          if (typeof value !== 'string' || /^\d{4}-\d{2}-\d{2}$/.test(value)) continue;
+          assert.equal(/^\+?\d[\d\s-]{7,}$/.test(value), false, `${where}: "${value}" looks dialable`);
+        }
+      }
+    }
+  }
+});
+
+test('the Lost VIP list still identifies who to call, by username', async () => {
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const lostTable = tableTitled(sectionOf(payload, 'vip'), 'Lost VIP');
+
+  assert.deepEqual(lostTable.rows.map((row) => row.Username), ['carol', 'dave']);
+  assert.equal(lostTable.rows[0].BIn_THB, 900 * THB_FACTOR);
+  // And it says where the contact details actually live.
+  assert.match(lostTable.note, /ระบบหลังบ้าน/);
 });
 
 test('VIP breaks down which agent actually produced the VIPs', async () => {
