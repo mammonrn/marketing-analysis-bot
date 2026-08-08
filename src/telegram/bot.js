@@ -6,7 +6,7 @@ import { sendSafe } from './send.js';
 import { startProgressReporter } from './progress.js';
 import { askClaude } from '../claude/client.js';
 import { detectFraudIntent } from '../fraud/guard.js';
-import { detectSite, siteDisplayName, ALL_SITE_KEYS } from '../data/sites.js';
+import { detectSite, getSite, siteDisplayName, ALL_SITE_KEYS } from '../data/sites.js';
 import { buildDataContext, fileInventory } from '../data/query.js';
 import { getFileType, FILE_TYPES } from '../data/fileTypes.js';
 import {
@@ -27,7 +27,16 @@ import {
   MAX_FX_RATE,
   LARGE_CHANGE_RATIO,
 } from '../data/fxRates.js';
-import { setPendingFxUpdate, getPendingFxUpdate, clearPendingFxUpdate } from '../data/db.js';
+import {
+  setPendingFxUpdate,
+  getPendingFxUpdate,
+  clearPendingFxUpdate,
+  listRawFileMonths,
+  startMenuSelection,
+  updateMenuSelection,
+  getMenuSelection,
+  clearMenuSelection,
+} from '../data/db.js';
 import { inspectSkillBundle } from '../prompt/loader.js';
 import {
   getOrCreateSession,
@@ -39,6 +48,25 @@ import {
   createSummaryToken,
 } from '../session/store.js';
 import { runSummary, offerSummary, SUMMARY_YES, SUMMARY_NO } from '../session/summary.js';
+import { buildMonthlyPayload } from '../session/monthlyReport.js';
+import {
+  MENU_QUICK,
+  MENU_MONTHLY,
+  MENU_SESSION,
+  MENU_CANCEL,
+  METRIC_PREFIX,
+  SITE_PREFIX,
+  MONTH_PREFIX,
+  FLOW_QUICK,
+  FLOW_MONTHLY,
+  MENU_TEXT,
+  getQuickMetric,
+  mainMenuKeyboard,
+  quickMetricsKeyboard,
+  siteKeyboard,
+  monthKeyboard,
+  monthLabel,
+} from './menu.js';
 import { setTelegramStatus } from '../runtime-state.js';
 
 const HELP_TEXT = [
@@ -50,6 +78,7 @@ const HELP_TEXT = [
   '• `88F มี referrer ผิดปกติไหม`',
   '',
   '*คำสั่ง*',
+  '`/menu` — เมนูปุ่ม (ดูตัวเลขด่วน / สรุปเดือน / สรุป session)',
   '`/สรุป` — สรุปภาพรวม session + dashboard',
   '`/จบ` — จบ session แล้วสรุป',
   '`/เว็บ SH666` — เปลี่ยนเว็บที่กำลังคุย',
@@ -460,6 +489,7 @@ const THAI_COMMANDS = [
   { re: /^\/?\s*(สรุป|สรุปหน่อย|ขอสรุป)\s*$/, action: 'summary' },
   { re: /^\/?\s*(จบ|จบเลย|จบ session|ปิด session)\s*$/i, action: 'summary' },
   { re: /^\/?\s*(ช่วยเหลือ|วิธีใช้)\s*$/, action: 'help' },
+  { re: /^\/?\s*(เมนู|เมนูหลัก)\s*$/, action: 'menu' },
   { re: /^\/?\s*เว็บ\s+(.+)$/, action: 'setSite' },
   // Slash required: "เรท" and "อัตราแลกเปลี่ยน" both turn up inside ordinary
   // questions, which must still reach Claude.
@@ -501,7 +531,16 @@ function chartKeyboard(chatId, envelope) {
   };
 }
 
-async function handleQuestion(ctx, question) {
+/**
+ * One question, answered the ordinary way.
+ *
+ * `site` and `yearMonths` are the menu flows' only concessions: a question
+ * assembled from buttons already knows which site and which month it is about,
+ * and the month can be older than the rolling 3-month window `buildDataContext`
+ * would otherwise apply. Everything after that — the context, the model call,
+ * the 4-part reply, the recorded turn — is identical to a typed question.
+ */
+async function handleQuestion(ctx, question, { site: siteOverride = null, yearMonths = null } = {}) {
   const chatId = ctx.chat.id;
   const userId = ctx.from.id;
 
@@ -510,7 +549,7 @@ async function handleQuestion(ctx, question) {
 
   const session = getOrCreateSession(chatId, userId);
   // Remember the last site so follow-ups need not repeat it (spec §5.1).
-  const site = detectSite(question) ?? session.site ?? null;
+  const site = siteOverride ?? detectSite(question) ?? session.site ?? null;
   if (site) setSessionSite(chatId, site);
 
   const isFraud = detectFraudIntent(question);
@@ -527,7 +566,10 @@ async function handleQuestion(ctx, question) {
     let dataContext;
     try {
       dataContext = site
-        ? await buildDataContext(site, question, { onProgress: parseProgress.onProgress })
+        ? await buildDataContext(site, question, {
+            onProgress: parseProgress.onProgress,
+            ...(yearMonths ? { yearMonths } : {}),
+          })
         : null;
     } finally {
       await parseProgress.finish();
@@ -579,13 +621,265 @@ async function handleQuestion(ctx, question) {
   }
 }
 
+// --- menu flows --------------------------------------------------------------
+
+const showMainMenu = (ctx) => sendSafe(ctx.telegram, ctx.chat.id, MENU_TEXT, mainMenuKeyboard());
+
+/**
+ * A button whose flow is no longer there.
+ *
+ * Inline keyboards stay tappable for ever, so a message from before a cancel,
+ * a restart or another flow can still be pressed. Answering it by silently
+ * starting a new selection would attach the tap to the wrong metric or month;
+ * saying so and reopening the menu is the only honest option.
+ */
+function menuExpired(ctx) {
+  return sendSafe(
+    ctx.telegram,
+    ctx.chat.id,
+    'รายการที่เลือกไว้ถูกยกเลิกหรือหมดอายุแล้วครับ — เริ่มใหม่จากเมนูหลักได้เลย',
+    mainMenuKeyboard(),
+  );
+}
+
+/** Shared step 2 of both flows: which site. */
+async function askForSite(ctx, prompt) {
+  return sendSafe(ctx.telegram, ctx.chat.id, prompt, siteKeyboard());
+}
+
+/**
+ * Shared step 3: which month, offered from what has actually been uploaded.
+ *
+ * A site with no files at all ends the flow here rather than showing an empty
+ * keyboard — there is no month to pick, and the useful answer is which file to
+ * send.
+ */
+async function askForMonth(ctx, site) {
+  const months = listRawFileMonths(site);
+  if (months.length === 0) {
+    clearMenuSelection(ctx.chat.id);
+    return sendSafe(
+      ctx.telegram,
+      ctx.chat.id,
+      `ยังไม่มีไฟล์ของ *${siteDisplayName(site)}* ในระบบเลยครับ — ส่งไฟล์ Excel เข้ามาก่อนนะครับ`,
+      mainMenuKeyboard(),
+    );
+  }
+
+  return sendSafe(
+    ctx.telegram,
+    ctx.chat.id,
+    `*${siteDisplayName(site)}* — เลือกเดือนครับ`,
+    monthKeyboard(months),
+  );
+}
+
+/** Step 4 of the quick flow: the button becomes the question a person would type. */
+async function runQuickMetric(ctx, { metric, site, yearMonth }) {
+  const definition = getQuickMetric(metric);
+  if (!definition) return menuExpired(ctx);
+
+  const question = definition.question(siteDisplayName(site), yearMonth);
+  logger.info('quick metric selected', { chatId: ctx.chat.id, metric, site, yearMonth });
+
+  await sendSafe(
+    ctx.telegram,
+    ctx.chat.id,
+    `${definition.label} · *${siteDisplayName(site)}* · ${monthLabel(yearMonth)}`,
+  );
+  return handleQuestion(ctx, question, { site, yearMonths: [yearMonth] });
+}
+
+/** Step 4 of the monthly flow: build the payload and hand back a Mini App link. */
+async function runMonthlyDashboard(ctx, { site, yearMonth }) {
+  const chatId = ctx.chat.id;
+
+  if (!config.http.publicUrl) {
+    logger.warn('PUBLIC_URL not set — monthly dashboard requested but no Mini App link possible');
+    return sendSafe(
+      ctx.telegram,
+      chatId,
+      '⚠️ ยังไม่ได้ตั้งค่า PUBLIC_URL จึงเปิด Dashboard ไม่ได้ครับ — รบกวนแจ้งผู้ดูแลระบบ',
+    );
+  }
+
+  await ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+
+  // Reading a whole month means parsing whatever has not been parsed yet, and
+  // a transaction log is the slow case — the same progress reporter the upload
+  // path uses keeps the wait visible.
+  const progress = startProgressReporter(ctx.telegram, chatId);
+  let payload;
+  try {
+    payload = await buildMonthlyPayload({
+      site,
+      yearMonth,
+      onProgress: progress.onProgress,
+    });
+  } catch (err) {
+    logger.error('monthly dashboard failed', {
+      chatId,
+      site,
+      yearMonth,
+      message: err?.message,
+      stack: err?.stack?.split('\n').slice(0, 3).join(' | '),
+    });
+    return sendSafe(ctx.telegram, chatId, '⚠️ สร้าง Dashboard ไม่สำเร็จครับ ลองใหม่อีกครั้ง');
+  } finally {
+    await progress.finish();
+  }
+
+  if (!payload) {
+    return sendSafe(
+      ctx.telegram,
+      chatId,
+      `ยังไม่มีไฟล์ของ *${siteDisplayName(site)}* เดือน ${monthLabel(yearMonth)} ในระบบครับ`,
+      mainMenuKeyboard(),
+    );
+  }
+
+  const token = createSummaryToken(chatId, payload);
+  const ready = payload.sections.filter((section) => section.available);
+
+  const lines = [
+    `📈 *สรุปเดือน ${monthLabel(yearMonth)} — ${payload.siteName}*`,
+    '',
+    `หมวดที่มีข้อมูล: *${ready.length}/${payload.sections.length}*`,
+  ];
+
+  if (payload.missingFiles.length > 0) {
+    lines.push(
+      '',
+      'ไฟล์ที่ยังขาดสำหรับเดือนนี้:',
+      ...payload.missingFiles.map((entry) => `• ${entry.label}`),
+    );
+  }
+
+  lines.push('', 'กดปุ่มด้านล่างเพื่อเปิด Dashboard เต็มครับ');
+
+  return sendSafe(ctx.telegram, chatId, lines.join('\n'), {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: '📈 เปิด Dashboard',
+            web_app: { url: `${config.http.publicUrl}/miniapp/monthly?token=${token}` },
+          },
+        ],
+      ],
+    },
+  });
+}
+
+/** Both flows converge here once a month has been picked. */
+async function completeMenuFlow(ctx, selection) {
+  clearMenuSelection(ctx.chat.id);
+
+  if (selection.flow === FLOW_QUICK) {
+    return runQuickMetric(ctx, {
+      metric: selection.metric,
+      site: selection.site,
+      yearMonth: selection.year_month,
+    });
+  }
+  if (selection.flow === FLOW_MONTHLY) {
+    return runMonthlyDashboard(ctx, { site: selection.site, yearMonth: selection.year_month });
+  }
+  return menuExpired(ctx);
+}
+
+/**
+ * Every menu button starts the same way: acknowledge the tap, and take the
+ * keyboard off the message that was pressed.
+ *
+ * Removing it matters — the alternative is a chat full of live keyboards from
+ * earlier steps, each one able to reopen a flow the user has moved past.
+ *
+ * Exported for tests: the properties worth asserting — that cancel really
+ * clears the stored selection, and that a button from a dead flow is refused
+ * rather than half-applied — are properties of these handlers, and reaching
+ * them through a live Telegraf instance would test Telegraf instead.
+ */
+export function registerMenuActions(bot) {
+  const consume = async (ctx, note) => {
+    await ctx.answerCbQuery(note).catch(() => {});
+    await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+  };
+
+  bot.action(MENU_CANCEL, async (ctx) => {
+    await consume(ctx, 'ยกเลิกแล้ว');
+    clearMenuSelection(ctx.chat.id);
+    logger.info('menu flow cancelled', { chatId: ctx.chat.id });
+    return sendSafe(ctx.telegram, ctx.chat.id, '❌ ยกเลิกแล้วครับ\n\n' + MENU_TEXT, mainMenuKeyboard());
+  });
+
+  bot.action(MENU_SESSION, async (ctx) => {
+    await consume(ctx, 'กำลังสรุป...');
+    clearMenuSelection(ctx.chat.id);
+    return runSummary(ctx.telegram, ctx.chat.id);
+  });
+
+  bot.action(MENU_QUICK, async (ctx) => {
+    await consume(ctx);
+    startMenuSelection(ctx.chat.id, { flow: FLOW_QUICK });
+    return sendSafe(
+      ctx.telegram,
+      ctx.chat.id,
+      '📊 *ดูตัวเลขด่วน* — เลือกตัวเลขที่อยากดูครับ',
+      quickMetricsKeyboard(),
+    );
+  });
+
+  bot.action(MENU_MONTHLY, async (ctx) => {
+    await consume(ctx);
+    startMenuSelection(ctx.chat.id, { flow: FLOW_MONTHLY });
+    return askForSite(ctx, '📈 *สรุปเดือน* — เลือกเว็บครับ');
+  });
+
+  bot.action(new RegExp(`^${METRIC_PREFIX}(.+)$`), async (ctx) => {
+    await consume(ctx);
+    const metricId = ctx.match[1];
+    if (!getQuickMetric(metricId)) return menuExpired(ctx);
+
+    // A tap on a metric is unambiguous on its own, so a missing selection is
+    // restarted rather than refused — unlike a site or month, which mean
+    // nothing without the flow that asked for them.
+    if (!updateMenuSelection(ctx.chat.id, { metric: metricId })) {
+      startMenuSelection(ctx.chat.id, { flow: FLOW_QUICK, metric: metricId });
+    }
+    return askForSite(ctx, `${getQuickMetric(metricId).label} — เลือกเว็บครับ`);
+  });
+
+  bot.action(new RegExp(`^${SITE_PREFIX}(.+)$`), async (ctx) => {
+    await consume(ctx);
+    const site = getSite(ctx.match[1])?.canonical ?? null;
+    if (!site) return menuExpired(ctx);
+
+    const selection = updateMenuSelection(ctx.chat.id, { site });
+    if (!selection) return menuExpired(ctx);
+    return askForMonth(ctx, site);
+  });
+
+  bot.action(new RegExp(`^${MONTH_PREFIX}(.+)$`), async (ctx) => {
+    await consume(ctx);
+    const yearMonth = ctx.match[1];
+
+    const selection = updateMenuSelection(ctx.chat.id, { yearMonth });
+    if (!selection?.site) return menuExpired(ctx);
+    return completeMenuFlow(ctx, selection);
+  });
+}
+
 export function createBot() {
   const bot = new Telegraf(config.telegram.token, { handlerTimeout: 120_000 });
 
   bot.use(whitelistMiddleware());
 
-  bot.start((ctx) => sendSafe(ctx.telegram, ctx.chat.id, HELP_TEXT));
+  // /start opens the menu rather than the help text: the buttons are the
+  // shortest path to an answer, and `/help` still has the full reference.
+  bot.start((ctx) => showMainMenu(ctx));
   bot.help((ctx) => sendSafe(ctx.telegram, ctx.chat.id, HELP_TEXT));
+  bot.command('menu', (ctx) => showMainMenu(ctx));
 
   bot.command('whoami', (ctx) =>
     sendSafe(
@@ -639,6 +933,8 @@ export function createBot() {
     return sendSafe(ctx.telegram, ctx.chat.id, lines.join('\n'));
   });
 
+  registerMenuActions(bot);
+
   bot.on('document', handleDocumentUpload);
 
   bot.action(UPLOAD_CONFIRM_YES, async (ctx) => {
@@ -690,6 +986,7 @@ export function createBot() {
     const command = matchThaiCommand(text);
     if (command?.action === 'summary') return runSummary(ctx.telegram, ctx.chat.id);
     if (command?.action === 'help') return sendSafe(ctx.telegram, ctx.chat.id, HELP_TEXT);
+    if (command?.action === 'menu') return showMainMenu(ctx);
     if (command?.action === 'setSite') return applySiteChange(ctx, command.arg);
     if (command?.action === 'fxRate') return handleFxRateCommand(ctx, command.arg);
 
@@ -697,6 +994,11 @@ export function createBot() {
     if (/^\//.test(text) && /^\/[a-z0-9_]+/i.test(text)) {
       return sendSafe(ctx.telegram, ctx.chat.id, `ไม่รู้จักคำสั่งนี้ครับ\n\n${HELP_TEXT}`);
     }
+
+    // Typing a question is a way of abandoning a half-made selection, so it
+    // clears the same state "❌ ยกเลิก" does — otherwise a keyboard from the
+    // abandoned flow stays live further up the chat.
+    if (getMenuSelection(ctx.chat.id)) clearMenuSelection(ctx.chat.id);
 
     return handleQuestion(ctx, text);
   });

@@ -671,9 +671,16 @@ function inventoryBlock(site, entries) {
  * Returns `null` only when the site has no files at all — the caller turns that
  * into "ยังไม่มีข้อมูล ขอให้ upload". Any file present means a context, even if
  * its rows could not be read.
+ *
+ * `yearMonths` names the months explicitly instead of taking the last
+ * `monthsBack` from today. The menu flows need it: a question typed in chat is
+ * implicitly about now, but one assembled from buttons carries the month the
+ * user picked, which can be older than the rolling window — and with the
+ * window applied that question reaches the model with no data at all and gets
+ * answered "ยังไม่ได้อัปโหลด" about a file that is sitting in the database.
  */
-export async function buildDataContext(site, question, { monthsBack = 3, onProgress } = {}) {
-  const candidateMonths = lastNYearMonths(monthsBack);
+export async function buildDataContext(site, question, { monthsBack = 3, yearMonths, onProgress } = {}) {
+  const candidateMonths = yearMonths?.length ? [...yearMonths] : lastNYearMonths(monthsBack);
 
   // What exists, per type, within the comparison window.
   const present = FILE_TYPE_IDS.map((fileType) => ({

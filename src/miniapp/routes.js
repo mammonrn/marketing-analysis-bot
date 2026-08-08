@@ -36,6 +36,23 @@ export function createRouter() {
     res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
   });
 
+  // A second page rather than a mode of the first.
+  //
+  // `index.html` renders one payload: a block of summary text, at most one
+  // chart, and a metrics table — a fixed layout with no navigation. The monthly
+  // report is eleven tabbed sections, each with its own KPI grid, charts and
+  // tables, and it is reached from a different button with a different payload
+  // shape. Merging them would put a `payload.kind` branch at the top of every
+  // function in `app.js` and carry two disjoint stylesheets in one file, for no
+  // shared markup at all. They already share what is worth sharing: the token,
+  // the `/api/summary/:token` route below, and the vendored Chart.js.
+  //
+  // Registered before the static handlers so the path is served as a page, not
+  // looked up as a file.
+  router.get('/miniapp/monthly', (req, res) => {
+    res.sendFile(path.join(PUBLIC_DIR, 'monthly.html'));
+  });
+
   router.get('/api/summary/:token', (req, res) => {
     const payload = readSummary(req.params.token);
     if (!payload) {

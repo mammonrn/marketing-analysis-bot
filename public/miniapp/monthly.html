@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>สรุปเดือน</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="/miniapp/vendor/chart.umd.min.js"></script>
+    <style>
+      :root {
+        /* Telegram injects these; the fallbacks keep the page readable in a
+           plain browser during development. */
+        --bg: var(--tg-theme-bg-color, #ffffff);
+        --fg: var(--tg-theme-text-color, #1c1c1e);
+        --muted: var(--tg-theme-hint-color, #8e8e93);
+        --card: var(--tg-theme-secondary-bg-color, #f2f2f7);
+        --accent: var(--tg-theme-button-color, #2f6feb);
+        --accent-fg: var(--tg-theme-button-text-color, #ffffff);
+        --border: color-mix(in srgb, var(--muted) 30%, transparent);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        padding: 16px 16px 32px;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Sarabun",
+          "Noto Sans Thai", Roboto, sans-serif;
+        font-size: 15px;
+        line-height: 1.6;
+        -webkit-text-size-adjust: 100%;
+      }
+
+      header { margin-bottom: 14px; }
+
+      h1 { font-size: 20px; line-height: 1.3; margin: 0 0 6px; font-weight: 700; }
+
+      .meta {
+        color: var(--muted);
+        font-size: 13px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 12px;
+      }
+
+      /* The tab strip scrolls sideways on its own so the page body never does. */
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 8px;
+        margin-bottom: 16px;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+      }
+      .toolbar::-webkit-scrollbar { display: none; }
+
+      .tab {
+        flex: 0 0 auto;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--fg);
+        border-radius: 999px;
+        padding: 6px 14px;
+        font-size: 14px;
+        font-family: inherit;
+        font-weight: 600;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .tab[aria-selected="true"] { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+      /* Dimmed rather than hidden: "this tab has no file this month" is itself
+         information, and a silently missing tab reads as a bug. */
+      .tab.empty { opacity: 0.5; }
+
+      section {
+        background: var(--card);
+        border-radius: 14px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+
+      /* Not upper-cased, unlike the session dashboard's fixed labels: these
+         headings are the payload's own chart and table titles, and the metric
+         names in them carry meaningful casing — "BIn" and "RTP" are how the
+         exports spell them, and "BIN" reads as a different word. */
+      h2 {
+        font-size: 14px;
+        letter-spacing: 0.02em;
+        color: var(--muted);
+        margin: 0 0 12px;
+        font-weight: 600;
+      }
+
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+      }
+      .kpi-label { color: var(--muted); font-size: 13px; line-height: 1.35; }
+      .kpi-value {
+        font-size: 19px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.3;
+      }
+      .kpi-hint { color: var(--muted); font-size: 12px; line-height: 1.35; }
+
+      /* A wide chart or table scrolls inside its own box rather than the page. */
+      .scroll-x { overflow-x: auto; }
+      .chart-box { position: relative; height: 300px; min-width: 280px; }
+
+      table { width: 100%; border-collapse: collapse; font-size: 14px; }
+      th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+      th { color: var(--muted); font-weight: 600; }
+      tr:last-child td { border-bottom: none; }
+      td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+      .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+      .empty-state { color: var(--muted); }
+
+      #error { text-align: center; padding: 48px 16px; color: var(--muted); }
+
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="error" hidden></div>
+
+    <div id="content" hidden>
+      <header>
+        <h1 id="title">สรุปเดือน</h1>
+        <div class="meta">
+          <span id="meta-currency"></span>
+          <span id="meta-time"></span>
+        </div>
+      </header>
+
+      <div class="toolbar" id="tabs" role="tablist"></div>
+
+      <div id="panel"></div>
+
+      <section id="missing-card" hidden>
+        <h2>ไฟล์ที่ยังขาดของเดือนนี้</h2>
+        <ul id="missing-list"></ul>
+      </section>
+    </div>
+
+    <script src="/miniapp/assets/monthly.js"></script>
+  </body>
+</html>

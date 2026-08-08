@@ -32,18 +32,65 @@ npm run smoke          # เช็คว่า Mini App เสิร์ฟได
 
 ```
 Telegram user
-   │  พิมพ์คำถามไทย / กด /สรุป
+   │  พิมพ์คำถามไทย / กด /menu / กด /สรุป
    ▼
 telegraf (polling หรือ webhook)
    ├─ whitelist            src/telegram/auth.js       ปฏิเสธคนที่ไม่อยู่ในลิสต์ก่อนเสีย API call
+   ├─ menu (ปุ่ม)          src/telegram/menu.js       เมนูหลัก + flow เลือก metric/เว็บ/เดือน
    ├─ session (SQLite)     src/session/store.js       จำเว็บล่าสุด + ทุก turn + idle clock
    ├─ file ingestion       src/data/ingest.js         รับไฟล์ Excel → เก็บดิบ + metadata (spec §3B)
    ├─ parse-on-demand      src/data/parse.js          แปลงไฟล์ → parsed_rows เฉพาะตอนมีคำถามใช้จริง
    ├─ data context         src/data/query.js          เลือก file_type ตามคำถาม + format ให้ Claude
    ├─ Anthropic            src/claude/client.js       system prompt = ไฟล์ skill ต่อกันแบบ verbatim
    │    └─ fraud guard     src/fraud/guard.js         บังคับโครงสร้าง 5 ส่วน + กันการฟันธง
+   ├─ monthly report       src/session/monthlyReport.js  รวม raw_files ทั้งเดือน → payload 11 หมวด
    └─ Mini App             src/miniapp/routes.js      Chart.js (vendored) ผ่าน token ใช้ครั้งเดียว
+        ├─ /miniapp            สรุป session (public/miniapp/index.html)
+        └─ /miniapp/monthly    สรุปเดือนแบบ tab (public/miniapp/monthly.html)
 ```
+
+### เมนูปุ่ม (`/menu` หรือ `/start`)
+
+ทางเข้าแบบไม่ต้องพิมพ์ 3 ทาง:
+
+| ปุ่ม | ทำอะไร |
+|---|---|
+| 📊 ดูตัวเลขด่วน | เลือก 1 ใน 6 metric (BIn / DAU / RTP / New Mems / VIP Active% / Bonus Cost) → เว็บ → เดือน → ตอบแบบ Conversational Mode ปกติ |
+| 📈 สรุปเดือน | เลือกเว็บ → เดือน → ปุ่มเปิด Dashboard เต็ม 11 หมวด |
+| 📋 สรุป session นี้ | เท่ากับ `/สรุป` เดิม |
+
+ทุกเมนูย่อยมีปุ่ม **❌ ยกเลิก** อยู่แถวสุดท้ายเสมอ กดแล้วเคลียร์ตัวเลือกที่ค้างอยู่
+(`menu_selections` ใน SQLite) แล้วกลับเมนูหลัก การพิมพ์คำถามใหม่ก็เคลียร์เหมือนกัน
+
+**ปุ่มไม่ได้เป็นทางลัดใหม่ — มันประกอบคำถามแล้วส่งเข้า pipeline เดิม** ข้อความที่ประกอบ
+ถูกเขียนให้ตรงกับ regex ที่ `src/data/query.js` มีอยู่แล้ว (เช่น `New Mems` → `new_member_quality`,
+`VIP` → `vip`, `Bonus` → `bonus_log`) — `test/menu.test.js` ยืนยันเรื่องนี้ผ่าน `pickFileType()`
+ถ้าแก้ข้อความปุ่มโดยไม่ดู regex คำถามจะตกไปที่ `daily_value` แล้วตอบจากไฟล์ผิดอย่างแนบเนียน
+
+เมนูเลือกเดือนสร้างจากเดือนที่**มีไฟล์อยู่จริง** (`listRawFileMonths`) ไม่ใช่จากปฏิทิน
+และคำถามจากปุ่มส่ง `yearMonths` ตรง ๆ เข้า `buildDataContext` แทนหน้าต่าง 3 เดือนย้อนหลัง
+เพราะเดือนที่ผู้ใช้เลือกอาจเก่ากว่านั้น
+
+### Dashboard สรุปเดือน
+
+`src/session/monthlyReport.js` แยกจาก `src/session/summary.js` เพราะอ่านคนละแหล่ง —
+`summary.js` สรุป *บทสนทนา* (อ่านจาก `turns`) ส่วนตัวนี้สรุป *เดือน* (อ่าน `raw_files`
+ทั้งหมดของ site+year_month ไม่ว่าจะเคยมีใครถามหรือไม่) และคำนวณตัวเลขเองใน JS ไม่ผ่านโมเดล
+
+11 หมวด: Overview, Finance, Activity, New Member, Deposit Count, Brand/Game, VIP,
+Referrer, Hours, Deposit Detail, Bonus — หมวดที่ยังไม่มีไฟล์จะขึ้น tab ไว้พร้อมบอกว่า
+ต้องอัปโหลดไฟล์ไหน (ไม่ซ่อน เพราะ tab ที่หายไปอ่านเหมือน bug)
+
+หน้าเว็บแยกเป็น `/miniapp/monthly` ไม่ได้ยัดรวมกับ `/miniapp` เดิม: หน้าเดิมเป็น layout
+ตายตัวหน้าเดียว (ข้อความสรุป + กราฟ 1 อัน + ตาราง metric) ส่วนหน้านี้เป็น tab 11 หมวด
+ที่แต่ละหมวดมี KPI/กราฟ/ตารางของตัวเอง — รวมกันแปลว่าต้องมี `if (payload.kind)` อยู่หัวทุก
+ฟังก์ชันใน `app.js` และแบก CSS สองชุดในไฟล์เดียวโดยไม่มี markup ร่วมกันเลย ส่วนที่ควรใช้ร่วม
+ใช้ร่วมอยู่แล้ว: token, route `/api/summary/:token` และ Chart.js ที่ vendor ไว้
+
+หน่วยเงิน/เปอร์เซ็นต์อ่านจากคอลัมน์ `_THB` / `_pct` ที่ `transform.js` แปลงให้แล้วเท่านั้น
+ไม่มีการคูณอัตราแลกเปลี่ยนหรือคูณ 100 ที่ไหนในโมดูลนี้หรือในหน้าเว็บ ratio ที่ pipeline
+ไม่มีคอลัมน์แปลงให้ (เช่น Power User Index, ฝากจริง% ของ referrer) คำนวณจาก**จำนวนคน**
+เท่านั้น ซึ่งเป็นกรณีเดียวที่ SKILL.md อนุญาต
 
 ### File ingestion (spec §3B) — แทนที่ Google Sheets เดิม
 
@@ -123,6 +170,7 @@ git add skills/ && git commit -m "sync: update skill" && git push
 |---|---|
 | ส่งไฟล์ `.xlsx` | อัปโหลดข้อมูลสิ้นเดือน — บอทเดาประเภทไฟล์/เว็บ/เดือนให้ (spec §3B) |
 | พิมพ์คำถามเลย | ตอบ 4 ส่วน: ตัวเลข+สถานะ / ข้อดี / ข้อเสีย / คำแนะนำ |
+| `/menu` `/start` `/เมนู` | เมนูปุ่ม 3 ทาง (ดูตัวเลขด่วน / สรุปเดือน / สรุป session) |
 | `/สรุป` `/จบ` | สรุป session + ปุ่มเปิด dashboard แล้วเคลียร์ session |
 | `/เว็บ SH666` | เปลี่ยนเว็บที่กำลังคุย (ปกติบอทจำเว็บล่าสุดให้อยู่แล้ว) |
 | `/whoami` | ดู Telegram ID ตัวเอง |
@@ -130,8 +178,8 @@ git add skills/ && git commit -m "sync: update skill" && git push
 | `/fxrate` | ดูอัตราแลกเปลี่ยนที่ใช้อยู่ทุกเว็บ + ที่มาของค่า (config หรือตั้งผ่านแชท) |
 | `/fxrate SH666 0.812` | (Super Admin) เปลี่ยนอัตรา — ต้องกดยืนยันก่อนถึงจะมีผล |
 
-`/สรุป` กับ `/จบ` เป็นภาษาไทย Telegram จึงไม่ tag เป็น bot_command — จับใน text handler
-(`/summary`, `/end` ใช้ได้เหมือนกัน)
+`/สรุป` `/จบ` `/เมนู` เป็นภาษาไทย Telegram จึงไม่ tag เป็น bot_command — จับใน text handler
+(`/summary`, `/end`, `/menu` ใช้ได้เหมือนกัน)
 
 ### อัตราแลกเปลี่ยน
 
