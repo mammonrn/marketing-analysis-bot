@@ -239,12 +239,43 @@ export function upsertRawFile({ site, yearMonth, fileType, relPath, fileSize, or
 
   const row = findRawFile({ site, yearMonth, fileType });
   // A prior version's rows are stale the moment the file underneath them changes.
-  d.prepare('DELETE FROM parsed_rows WHERE raw_file_id = ?').run(row.id);
+  deleteParsedRows(row.id);
   return row;
 }
 
 export function markParsed(rawFileId) {
   requireDb().prepare('UPDATE raw_files SET parsed = 1 WHERE id = ?').run(rawFileId);
+}
+
+/**
+ * Sends a file back through parsing on its next read.
+ *
+ * Only useful next to `deleteParsedRows`: on its own it would leave the old
+ * rows in place and add a second set beside them on the next parse.
+ */
+export function markUnparsed(rawFileId) {
+  requireDb().prepare('UPDATE raw_files SET parsed = 0 WHERE id = ?').run(rawFileId);
+}
+
+/** Drops one file's parsed cache. Returns how many rows went. */
+export function deleteParsedRows(rawFileId) {
+  return requireDb().prepare('DELETE FROM parsed_rows WHERE raw_file_id = ?').run(rawFileId).changes;
+}
+
+/**
+ * What is actually stored for one file, furniture included.
+ *
+ * Deliberately not `queryParsedRows`: that one hides dateless rows on a dated
+ * series, which is exactly the thing a caller counting them wants to see.
+ */
+export function countParsedRows(rawFileId) {
+  const row = requireDb()
+    .prepare(
+      `SELECT COUNT(*) AS total, COUNT(row_date) AS dated
+       FROM parsed_rows WHERE raw_file_id = ?`,
+    )
+    .get(rawFileId);
+  return { total: row.total, dated: row.dated, dateless: row.total - row.dated };
 }
 
 export function listRawFiles({ site, yearMonth } = {}) {
