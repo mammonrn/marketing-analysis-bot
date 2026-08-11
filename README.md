@@ -211,6 +211,26 @@ git add skills/ && git commit -m "sync: update skill" && git push
 `fxRate` (อัตราสกุลเงินท้องถิ่น → THB) และ `fxRateAsOf` (วันที่บันทึกอัตรานั้น)
 ตัวคูณจริงคำนวณจาก `scaleFactor × fxRate` ตอนอ่าน config ไม่ได้เก็บเป็นตัวเลขไว้
 
+### สเกลของคอลัมน์ Points (ไฟล์ point log)
+
+คอลัมน์ `Points` ใน `bonus.xlsx` / `reward point.xlsx` / `other transfer.xlsx`
+**ไม่ได้ใช้สเกลเดียวกับคอลัมน์เงินอื่น** จึงมี `pointsScaleFactor` แยกไว้ใน config
+ไฟล์เดียวกัน (SH666 = 100 — ค่าดิบ `1.200` = 120 MMK)
+`pointsFactor` = `pointsScaleFactor × fxRate` คำนวณตอนอ่าน config เหมือน `moneyFactor`
+
+มีแค่ SH666 ที่ตั้งค่าไว้ เว็บที่ยังไม่ได้ตั้งค่า ถ้ามีไฟล์ point log
+เข้ามาจะ throw ตอน parse (`ยังไม่ได้ตั้งค่า pointsScaleFactor สำหรับเว็บนี้`)
+ตั้งใจให้พังเสียงดังแทนที่จะยืมสเกลของเว็บอื่นมาใช้แล้วรายงานผิดเงียบๆ
+รายละเอียดอยู่ใน `skills/thai-data-analyst/references/bonus-log.md`
+
+> ⏳ **ค่า 100 ยังไม่ยืนยันขั้นสุดท้าย** — มาจากคำยืนยันของผู้ใช้ ยังไม่ได้เทียบกับ
+> ภาพหน้าจอ Power BI จริง และเคยเปลี่ยนไปมาแล้วหลายรอบ (เคยเป็น 100,000)
+> ถ้าจะแก้ แก้ที่ `config/site-aliases.json` จุดเดียว
+
+> ข้อจำกัดที่รู้ตัว: `total_points_THB` คำนวณตอน parse แล้วเก็บลง `parsed_rows`
+> ต่างจากคอลัมน์ `_THB` อื่นที่แปลงตอน query — ถ้าเปลี่ยน `/fxrate` ทีหลัง
+> แถวที่ parse ไว้แล้วจะยังใช้อัตราเดิม ต้อง re-parse ไฟล์นั้นถึงจะขยับตาม
+
 ค่าที่เปลี่ยนผ่าน `/fxrate` **ไม่ได้เขียนทับไฟล์ config** แต่เก็บเป็นแถวใหม่ใน SQLite
 (`fx_rate_overrides`, append เท่านั้น มีประวัติครบ) แล้ว layer ทับตอน runtime —
 เพราะไฟล์ config อยู่ใน git ถ้าบอทเขียนทับจะชนกับ `git pull` และอาจถูก checkout ทับหายเงียบ

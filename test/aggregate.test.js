@@ -18,6 +18,11 @@ process.env.ANTHROPIC_API_KEY ??= 'test-key';
 
 const { aggregateDepositDetail, aggregateBonusLog } = await import('../src/data/aggregate.js');
 const { parsePivotSheet } = await import('../src/data/parse.js');
+const { SITES, applyFxOverride, clearFxOverrides } = await import('../src/data/sites.js');
+
+// The only site whose `Points` scale has been verified against a real file,
+// and therefore the only one these tests can convert with.
+const SH666 = 'shwe666';
 
 test('aggregateDepositDetail summarises per day and payment channel', () => {
   const rows = [
@@ -72,7 +77,7 @@ test('aggregateBonusLog sums points per day and type', () => {
     { AddTime: '2026-06-01', Type: 'Loyalty Point', Points: 5.5 },
     { AddTime: '2026-06-01', Type: 'Referrer Reward Point', Points: 3 },
     { AddTime: '2026-06-02', Type: 'Loyalty Point', Points: 1 },
-  ]);
+  ], { site: SH666 });
 
   assert.equal(out.length, 3);
   const loyaltyDay1 = out.find((r) => r.Date === '2026-06-01' && r.Type === 'Loyalty Point');
@@ -84,9 +89,123 @@ test('aggregateBonusLog counts a row even when its Points cell is unreadable', (
   const out = aggregateBonusLog([
     { AddTime: '2026-06-01', Type: 'Loyalty Point', Points: 10 },
     { AddTime: '2026-06-01', Type: 'Loyalty Point', Points: null },
-  ]);
+  ], { site: SH666 });
   assert.equal(out[0].total_points, 10);
   assert.equal(out[0].transaction_count, 2);
+});
+
+/**
+ * The regression this whole change exists for.
+ *
+ * SH666's `reward_point.xlsx` for 2026-07: the "Money Daily" row reads 1.200
+ * in the file and is 120 MMK in reality. Reading the column raw is what
+ * produced "Loyalty Point รวม 278.8" for a figure two orders of magnitude
+ * larger.
+ *
+ * The scale itself is still provisional (see `sites.js`) — it has been stated
+ * but not checked against Power BI, and it has moved before. These two tests
+ * are written so that a future correction changes the expected numbers here
+ * and nowhere else in this file.
+ */
+test('a raw Points value of 1.200 is 120 MMK before any fx conversion', (t) => {
+  t.after(clearFxOverrides);
+  // fxRate 1 isolates the point scale from the currency step, so this asserts
+  // the MMK figure itself rather than inferring it back out of a baht number.
+  applyFxOverride(SH666, { fxRate: 1, fxRateAsOf: '2026-07-31' });
+
+  const out = aggregateBonusLog(
+    [{ AddTime: '2026-07-15', Type: 'Money Daily', Points: 1.2 }],
+    { site: SH666 },
+  );
+
+  assert.equal(out[0].total_points, 1.2, 'the raw column must survive untouched');
+  assert.equal(out[0].total_points_THB, 120);
+});
+
+test('120 MMK then converts to baht at the site rate', () => {
+  const out = aggregateBonusLog(
+    [{ AddTime: '2026-07-15', Type: 'Money Daily', Points: 1.2 }],
+    { site: SH666 },
+  );
+
+  const { pointsScaleFactor, fxRate } = SITES[SH666];
+  assert.equal(pointsScaleFactor, 100);
+  // 1.2 × 100 × 0.787 = 94.44. Tolerance rather than strict equality for the
+  // same reason as the fx-change test below: the code combines the scale and
+  // the rate in the other order, and whether that lands on the same float
+  // depends on the scale itself.
+  assert.ok(Math.abs(out[0].total_points_THB - 1.2 * pointsScaleFactor * fxRate) < 1e-9);
+  assert.ok(Math.abs(out[0].total_points_THB - 94.44) < 1e-6);
+});
+
+test('aggregateBonusLog keeps the raw sum alongside the converted one', () => {
+  const out = aggregateBonusLog(
+    [
+      { AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 1 },
+      { AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 2 },
+    ],
+    { site: SH666 },
+  );
+
+  // Both columns, because only the raw one can be checked against Power BI.
+  assert.equal(out[0].total_points, 3);
+  assert.equal(out[0].total_points_THB, 3 * SITES[SH666].pointsFactor);
+});
+
+test('the converted column uses the _THB spelling query.js pairs and labels', () => {
+  const [row] = aggregateBonusLog(
+    [{ AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 1 }],
+    { site: SH666 },
+  );
+  // Lower-case `_thb` would reach the model as an unexplained third number:
+  // `CONVERTED_SUFFIXES` in query.js matches on the exact `_THB` suffix.
+  assert.ok('total_points_THB' in row);
+  assert.ok(!('total_points_thb' in row));
+});
+
+test('a site with no pointsScaleFactor refuses to guess one', () => {
+  // U89/88F have no verified scale, so their point logs must fail loudly
+  // rather than borrow SH666's scale — the failure mode the old fused
+  // `moneyFactor` taught this codebase to fear.
+  for (const site of ['ubet89', '88fed']) {
+    assert.equal(SITES[site].pointsFactor, null, `${site} must not have a guessed factor`);
+    assert.throws(
+      () => aggregateBonusLog([{ AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 1 }], { site }),
+      /ยังไม่ได้ตั้งค่า pointsScaleFactor/,
+      `${site} should refuse rather than convert`,
+    );
+  }
+});
+
+test('aggregateBonusLog refuses to run without a site at all', () => {
+  assert.throws(
+    () => aggregateBonusLog([{ AddTime: '2026-07-15', Type: 'Loyalty Point', Points: 1 }]),
+    /ต้องระบุเว็บ/,
+  );
+});
+
+test('a runtime fx change moves the converted points with it', (t) => {
+  t.after(clearFxOverrides);
+  const rows = [{ AddTime: '2026-07-15', Type: 'Money Daily', Points: 1.2 }];
+
+  const atConfigRate = aggregateBonusLog(rows, { site: SH666 })[0].total_points_THB;
+  applyFxOverride(SH666, { fxRate: 0.812, fxRateAsOf: '2026-08-08' });
+  const atNewRate = aggregateBonusLog(rows, { site: SH666 })[0].total_points_THB;
+
+  assert.notEqual(atNewRate, atConfigRate);
+  // Reads the scale from config: the claim here is that the *rate* moved, and
+  // it should keep holding when the point scale is finally confirmed.
+  //
+  // Compared with a tolerance because the code multiplies by the pre-combined
+  // `pointsFactor` (scale × rate) while this line associates the other way —
+  // the two differ in the last bit, and which way it lands depends on the
+  // scale in config. Pinning an exact float here would make an unrelated
+  // change to that value look like a conversion bug.
+  const expected = 1.2 * SITES[SH666].pointsScaleFactor * 0.812;
+  assert.ok(
+    Math.abs(atNewRate - expected) < 1e-9,
+    `expected ${atNewRate} ≈ ${expected}`,
+  );
 });
 
 function hourPivotBuffer(measureLabel) {

@@ -56,7 +56,10 @@ export async function ensureParsed({ site, yearMonth, fileType, onProgress } = {
   // Reading + reshaping + aggregating all happen in `parseWorkbookRows`, on a
   // worker thread when the file is large enough to be worth it. Only the
   // insert below touches the database, and it stays on this thread.
-  const rows = await parseWorkbookRows({ filePath: absPath, fileType, onProgress });
+  // `site` is passed down because the point-log aggregators need this site's
+  // `Points` scale to convert; every other file type ignores it and converts
+  // at query time instead.
+  const rows = await parseWorkbookRows({ filePath: absPath, fileType, site, onProgress });
 
   const dateColumn = type?.dateColumn;
   const parsedRows = rows.map((row) => ({

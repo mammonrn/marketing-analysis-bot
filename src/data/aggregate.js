@@ -14,6 +14,7 @@
 
 import { normaliseDate } from './dates.js';
 import { toNumber } from './transform.js';
+import { getSite, siteDisplayName } from './sites.js';
 
 // Often enough to keep a progress message moving on a 150k-row file, rare
 // enough that the reporting itself costs nothing.
@@ -87,17 +88,72 @@ export function aggregateDepositDetail(rows, { onProgress } = {}) {
 }
 
 /**
- * `bonus.xlsx` → one row per (day × Type): how many point transactions of
- * that kind happened and how many points they moved.
+ * Resolves the factor that turns a raw `Points` cell into baht, or explains
+ * why it cannot.
+ *
+ * The point logs are the one export where the raw cell is not on the same
+ * scale as the money columns: SH666's `Points` column carries its own scale,
+ * so a raw `1.200` is 120 MMK. Summing the raw column and calling the result
+ * an amount — which is what this function exists to stop — is how "Loyalty
+ * Point รวม 278.8" came to be reported for a figure two orders of magnitude
+ * larger.
+ *
+ * A site with no `pointsScaleFactor` throws rather than borrowing SH666's.
+ * Whether U89/88F share SH666's scale is unknown, and a wrong factor here is
+ * invisible in a way a missing file is not — the numbers still look like
+ * numbers. This is the same failure the fused `moneyFactor` produced (see
+ * `sites.js`), and the only defence that works is refusing to produce a
+ * figure at all. SH666's own value is still provisional; see `sites.js`.
  */
-export function aggregateBonusLog(rows, { onProgress } = {}) {
+function requirePointsFactor(siteInput) {
+  const site = getSite(siteInput);
+  if (!site) {
+    throw new Error(
+      `aggregateBonusLog: ต้องระบุเว็บ (site) ก่อนจึงจะแปลง Points เป็นเงินได้ — ได้รับ: ${siteInput ?? 'ไม่มี'}`,
+    );
+  }
+  if (site.pointsFactor === null) {
+    throw new Error(
+      `ยังไม่ได้ตั้งค่า pointsScaleFactor สำหรับเว็บนี้ (${siteDisplayName(site.canonical)}) — ` +
+        'ไฟล์ point log (bonus / reward point / other transfer) ของเว็บนี้จึงยังแปลงเป็นเงินไม่ได้ ' +
+        'ต้องยืนยันสเกลของคอลัมน์ Points กับไฟล์จริงก่อน แล้วเพิ่ม pointsScaleFactor ใน ' +
+        'config/site-aliases.json (ห้ามยืมค่าของเว็บอื่นมาใช้)',
+    );
+  }
+  return site;
+}
+
+/**
+ * `bonus.xlsx` → one row per (day × Type): how many point transactions of
+ * that kind happened, how many raw points they moved, and what that is worth
+ * in baht.
+ *
+ * Both columns are kept on purpose. `total_points` is the raw sum, which is
+ * the only figure that can be checked against Power BI; `total_points_THB` is
+ * the one to quote. The `_THB` spelling is not cosmetic — `query.js` pairs a
+ * `X_THB` column with its raw `X` and labels the units, so a lower-case
+ * suffix would reach the model as an unexplained third number.
+ *
+ * KNOWN LIMITATION: unlike every other `_THB` column, this one is computed at
+ * parse time and stored, so it freezes the rate in force when the file was
+ * first parsed. A later `/fxrate` change does not reach rows already in
+ * `parsed_rows`; those need a re-parse. It is computed here anyway because
+ * this is also the only point in the pipeline that sees the file arrive, and
+ * so the only place the missing-scale refusal above can fire before a wrong
+ * number is stored.
+ */
+export function aggregateBonusLog(rows, { site: siteInput, onProgress } = {}) {
+  const site = requirePointsFactor(siteInput);
+
   return groupByDayAnd(rows, 'AddTime', 'Type', onProgress).map(({ date, category, rows: group }) => {
     const points = group.map((row) => toNumber(row.Points)).filter((n) => Number.isFinite(n));
+    const totalPoints = points.reduce((sum, n) => sum + n, 0);
 
     return {
       Date: date,
       Type: category,
-      total_points: points.reduce((sum, n) => sum + n, 0),
+      total_points: totalPoints,
+      total_points_THB: totalPoints * site.pointsFactor,
       transaction_count: group.length,
     };
   });

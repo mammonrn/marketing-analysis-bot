@@ -55,6 +55,44 @@ test('moneyFactor is derived from scaleFactor × fxRate, not stored', () => {
   assert.equal(SITES.shwe666.needsFxConversion, true);
 });
 
+test('pointsScaleFactor is separate from scaleFactor, not a rename of it', () => {
+  // The point logs carry their own scale: SH666's `Points` column is ÷100
+  // where its money columns are ÷1,000. Fusing the two is the bug.
+  //
+  // The 100 is provisional — stated by the operator, not yet checked against
+  // Power BI, and previously carried as 100,000. When it is confirmed, this
+  // test is meant to be updated deliberately rather than to keep passing by
+  // reading the value it is supposed to be pinning.
+  assert.equal(SITES.shwe666.scaleFactor, 1000);
+  assert.equal(SITES.shwe666.pointsScaleFactor, 100);
+  assert.equal(SITES.shwe666.pointsFactor, 100 * 0.787);
+  assert.notEqual(
+    SITES.shwe666.pointsScaleFactor,
+    SITES.shwe666.scaleFactor,
+    'the two scales must stay separate values, whatever the point scale turns out to be',
+  );
+});
+
+test('pointsFactor is derived from pointsScaleFactor × fxRate, not stored', () => {
+  for (const site of Object.values(SITES)) {
+    if (site.pointsScaleFactor === undefined) continue;
+    assert.equal(
+      site.pointsFactor,
+      site.pointsScaleFactor * site.fxRate,
+      `${site.canonical} pointsFactor must equal pointsScaleFactor × fxRate`,
+    );
+  }
+});
+
+test('a site with no verified point scale reports null rather than a default', () => {
+  // Only SH666's scale has been checked against a real file. `null` is what
+  // makes `aggregateBonusLog` throw instead of quietly reusing SH666's scale.
+  assert.equal(SITES.ubet89.pointsFactor, null);
+  assert.equal(SITES['88fed'].pointsFactor, null);
+  assert.equal(SITES.ubet89.pointsScaleFactor, undefined);
+  assert.equal(SITES['88fed'].pointsScaleFactor, undefined);
+});
+
 test('every site declares a currency, an fxRate and the date it was taken', () => {
   for (const site of Object.values(SITES)) {
     assert.ok(site.currency, `${site.canonical} must name its source currency`);

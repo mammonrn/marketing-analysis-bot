@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAndShapeRows } from './workbook.js';
+import { getSite } from './sites.js';
 import { logger } from '../logger.js';
 
 const WORKER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'parseWorker.js');
@@ -40,10 +41,27 @@ function sizeOf({ filePath, buffer }) {
   }
 }
 
-function runOnWorker({ filePath, buffer, fileType, shape, dateColumn, onProgress }) {
+/**
+ * The rate in force for this site, so the worker can be told about it.
+ *
+ * A worker starts with a fresh module graph and therefore an empty override
+ * map (see `sites.js`): it would read the rate that shipped in the config and
+ * miss any change made from chat. That cost nothing while the worker only
+ * reshaped rows, but `aggregateBonusLog` now converts money on this thread,
+ * and a >2MB file is exactly the case that goes down the worker path — so
+ * without this the same bonus file would convert differently depending on its
+ * size, which is the worst possible way for a rate to be wrong.
+ */
+function fxStateFor(siteInput) {
+  const site = getSite(siteInput);
+  if (!site) return null;
+  return { canonical: site.canonical, fxRate: site.fxRate, fxRateAsOf: site.fxRateAsOf };
+}
+
+function runOnWorker({ filePath, buffer, fileType, site, shape, dateColumn, onProgress }) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(WORKER_PATH, {
-      workerData: { filePath, buffer, fileType, shape, dateColumn },
+      workerData: { filePath, buffer, fileType, site, shape, dateColumn, fxState: fxStateFor(site) },
       // The rows come back by structured clone anyway; keeping the default
       // resource limits means a runaway file kills the worker, not the bot.
     });
@@ -91,8 +109,8 @@ export async function parseWorkbookRows(job = {}) {
   }
 
   const startedAt = Date.now();
-  const { fileType, shape = 'typed' } = job;
-  logger.info('parsing workbook on a worker thread', { fileType, bytes, shape });
+  const { fileType, shape = 'typed', site } = job;
+  logger.info('parsing workbook on a worker thread', { fileType, site, bytes, shape });
   try {
     const result = await runOnWorker(job);
     logger.info('worker parse finished', {

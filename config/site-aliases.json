@@ -4,6 +4,7 @@
     "aliases": ["SH666", "SHWE666", "shwe666"],
     "currency": "MMK",
     "scaleFactor": 1000,
+    "pointsScaleFactor": 100,
     "fxRate": 0.787,
     "fxRateAsOf": "2026-08-07",
     "referenceFile": "casino-metrics.md"
