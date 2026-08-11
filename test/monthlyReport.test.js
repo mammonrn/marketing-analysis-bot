@@ -12,6 +12,7 @@ process.env.ANTHROPIC_API_KEY ??= 'test-key';
 let tmpDir;
 let db;
 let monthly;
+let ROOT;
 
 const SITE = 'shwe666';
 const MONTH = '2026-07';
@@ -56,6 +57,7 @@ before(async () => {
   db = await import('../src/data/db.js');
   db.initDataDb(path.join(tmpDir, 'test.sqlite'));
   monthly = await import('../src/session/monthlyReport.js');
+  ({ ROOT } = await import('../src/paths.js'));
 
   seed({ fileType: 'daily_value', rows: dailyValueRows });
   seed({
@@ -134,12 +136,15 @@ before(async () => {
       { Date: '2026-07-01', PayName: 'wave_money', total_count: 50, success_count: 25, success_rate: 0.5, avg_duration_min: 9 },
     ],
   });
+  // `aggregateBonusLog` writes both columns: the raw Power BI sum and the baht
+  // figure it converts to with the site's own `pointsScaleFactor`. SH666's is
+  // 100, so 1,000 raw points × 100 × 0.787 = ฿78,700.
   seed({
     fileType: 'bonus_log',
     rows: [
-      { Date: '2026-07-01', Type: 'Loyalty Point', total_points: 1000, transaction_count: 50 },
-      { Date: '2026-07-02', Type: 'Loyalty Point', total_points: 1500, transaction_count: 60 },
-      { Date: '2026-07-01', Type: 'Referrer Reward Point', total_points: 300, transaction_count: 10 },
+      { Date: '2026-07-01', Type: 'Loyalty Point', total_points: 1000, total_points_THB: 1000 * 100 * 0.787, transaction_count: 50 },
+      { Date: '2026-07-02', Type: 'Loyalty Point', total_points: 1500, total_points_THB: 1500 * 100 * 0.787, transaction_count: 60 },
+      { Date: '2026-07-01', Type: 'Referrer Reward Point', total_points: 300, total_points_THB: 300 * 100 * 0.787, transaction_count: 10 },
     ],
   });
 });
@@ -617,18 +622,63 @@ test('deposit detail rolls the daily rows back up per channel and flags the bad 
   assert.match(section.alerts[0].text, /wave_money/);
 });
 
-test('bonus totals points per type and never labels them as baht', async () => {
+test('bonus leads with the baht cost the pipeline converted, not the raw points', async () => {
   const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
   const section = sectionOf(payload, 'bonus');
+  const POINTS_THB = 100 * 0.787; // SH666 pointsScaleFactor × fxRate
 
-  assert.equal(kpiOf(section, 'Point รวมที่จ่าย').value, 2800);
+  // 1000 + 1500 + 300 = 2,800 raw points.
+  const cost = kpiOf(section, 'ต้นทุน Point รวม');
+  assert.equal(cost.unit, 'thb');
+  assert.ok(Math.abs(cost.value - 2800 * POINTS_THB) < 0.01, `cost was ${cost.value}`);
   assert.equal(kpiOf(section, 'ประเภทที่กินงบสูงสุด').value, 'Loyalty Point');
 
   const loyalty = section.tables[0].rows.find((row) => row.Type === 'Loyalty Point');
-  assert.equal(loyalty.total_points, 2500);
-  // Points are not money, so nothing here may claim to be baht.
-  for (const column of section.tables[0].columns) assert.notEqual(column.unit, 'thb');
-  for (const kpi of section.kpis) assert.notEqual(kpi.unit, 'thb');
+  assert.ok(Math.abs(loyalty.total_points_THB - 2500 * POINTS_THB) < 0.01);
+  // Sorted by cost, so the biggest spend is the first row.
+  assert.equal(section.tables[0].rows[0].Type, 'Loyalty Point');
+});
+
+test('bonus keeps the raw point sum, labelled as a cross-check and not as money', async () => {
+  // aggregate.js is explicit that the raw column is the only figure that can
+  // be checked against Power BI, and that it must never be quoted as an
+  // amount. Both halves of that are asserted here.
+  const payload = await monthly.buildMonthlyPayload({ site: SITE, yearMonth: MONTH });
+  const section = sectionOf(payload, 'bonus');
+
+  const raw = kpiOf(section, 'Point ดิบรวม (cross-check)');
+  assert.equal(raw.value, 2800);
+  assert.equal(raw.unit, 'number', 'the raw sum must not be formatted as baht');
+  assert.match(raw.note, /ห้ามรายงานเป็นจำนวนเงิน/);
+
+  const rawColumn = section.tables[0].columns.find((column) => column.key === 'total_points');
+  assert.equal(rawColumn.unit, 'number');
+  assert.equal(section.tables[0].rows[0].total_points, 2500);
+});
+
+test('a section whose file the parser refused explains why, in the parser own words', async () => {
+  // U89 has no `pointsScaleFactor`, so aggregateBonusLog throws rather than
+  // storing a wrongly-scaled figure. The tab must pass that reason through:
+  // "อ่านไฟล์ไม่ได้" would send someone re-uploading a file that is fine, when
+  // the fix is a config entry.
+  const workbook = path.join(tmpDir, 'bonus-u89.xlsx');
+  fs.writeFileSync(workbook, 'not a real workbook');
+  db.upsertRawFile({
+    site: 'ubet89',
+    yearMonth: '2026-04',
+    fileType: 'bonus_log',
+    relPath: path.relative(ROOT, workbook),
+    fileSize: 20,
+    originalFilename: 'bonus.xlsx',
+  });
+
+  const payload = await monthly.buildMonthlyPayload({ site: 'ubet89', yearMonth: '2026-04' });
+  const section = sectionOf(payload, 'bonus');
+
+  assert.equal(section.available, false);
+  assert.match(section.reason, /pointsScaleFactor/);
+  // And the other tabs of that month are unaffected.
+  assert.equal(sectionOf(payload, 'overview').available, true);
 });
 
 // --- missing and broken files ------------------------------------------------

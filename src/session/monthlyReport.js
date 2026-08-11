@@ -212,6 +212,30 @@ function bottomBy(records, column, limit = TOP_N) {
  * unavailable rather than thrown — one broken export must not cost the other
  * ten sections.
  */
+const GENERIC_LOAD_FAILURE = 'มีไฟล์อยู่ในระบบ แต่อ่านข้อมูลจากไฟล์ไม่ได้';
+
+/**
+ * What to put on the tab when a file would not load.
+ *
+ * Two kinds of failure end up here and they deserve different answers. A
+ * deliberate refusal — `aggregateBonusLog` declining to convert points for a
+ * site with no `pointsScaleFactor`, `ensureParsed` reporting a missing month —
+ * is thrown with a message written for exactly this moment, and swallowing it
+ * sends someone re-uploading a file that was never the problem. An incident —
+ * a missing file on disk, a permissions error — arrives as a Node system error
+ * whose message is an absolute server path, which tells the reader nothing and
+ * exposes the layout of the box.
+ *
+ * `err.code` separates them: Node stamps it on system errors, and the
+ * deliberate throws in this codebase are plain `Error`s without one.
+ */
+function loadFailureReason(err) {
+  if (err?.code) return GENERIC_LOAD_FAILURE;
+  const message = String(err?.message ?? '').trim();
+  if (!message || message.length > 400) return GENERIC_LOAD_FAILURE;
+  return message;
+}
+
 async function loadRows({ site, yearMonth, fileType, onProgress }) {
   const label = getFileType(fileType)?.label ?? fileType;
   try {
@@ -228,16 +252,20 @@ async function loadRows({ site, yearMonth, fileType, onProgress }) {
       fileType,
       message: err?.message,
     });
-    return null;
+    return { entries: null, reason: loadFailureReason(err) };
   }
 
   const rows = queryParsedRows({ site, fileType, yearMonths: [yearMonth] });
-  if (rows.length === 0) return null;
+  if (rows.length === 0) {
+    return { entries: null, reason: GENERIC_LOAD_FAILURE };
+  }
 
-  return rows.map((row) => ({
-    date: row.row_date,
-    record: { ...normaliseRow(row.row, site), ...deriveMetrics(row.row, site) },
-  }));
+  return {
+    entries: rows.map((row) => ({
+      date: row.row_date,
+      record: { ...normaliseRow(row.row, site), ...deriveMetrics(row.row, site) },
+    })),
+  };
 }
 
 // --- sections ----------------------------------------------------------------
@@ -1463,66 +1491,82 @@ const SECTIONS = [
     build(entries) {
       const records = entries.map((entry) => entry.record);
 
+      // `aggregateBonusLog` produces `total_points_THB` beside the raw
+      // `total_points`, using each site's own `pointsScaleFactor` — the point
+      // logs are the one export whose raw cell is not on the same scale as the
+      // money columns. So the baht figure is the one to lead with here, and
+      // the raw sum stays alongside it as the only thing that can be
+      // cross-checked against Power BI.
       const types = new Map();
       for (const record of records) {
         const name = String(record.Type ?? '').trim() || '(ไม่ระบุประเภท)';
-        if (!types.has(name)) types.set(name, { name, points: 0, count: 0 });
+        if (!types.has(name)) types.set(name, { name, points: 0, thb: 0, count: 0 });
         const bucket = types.get(name);
         bucket.points += num(record.total_points) ?? 0;
+        bucket.thb += num(record.total_points_THB) ?? 0;
         bucket.count += num(record.transaction_count) ?? 0;
       }
 
       const rows = [...types.values()]
         .map((bucket) => ({
           Type: bucket.name,
+          total_points_THB: bucket.thb,
           total_points: bucket.points,
           transaction_count: bucket.count,
-          avg_points: bucket.count ? bucket.points / bucket.count : null,
+          avg_thb: bucket.count ? bucket.thb / bucket.count : null,
         }))
-        .sort((a, b) => b.total_points - a.total_points);
+        .sort((a, b) => b.total_points_THB - a.total_points_THB);
 
+      const totalThb = rows.reduce((total, row) => total + row.total_points_THB, 0);
       const totalPoints = rows.reduce((total, row) => total + row.total_points, 0);
       const totalTxn = rows.reduce((total, row) => total + row.transaction_count, 0);
       const series = dailySeries(entries, [
-        { column: 'total_points', label: 'point ที่จ่าย', unit: NUMBER },
+        { column: 'total_points_THB', label: 'ต้นทุน point (บาท)', unit: THB },
       ]);
 
       const insights = [
-        `ต้นทุน Point รวม ${fmtInt(totalPoints)} จาก ${fmtInt(totalTxn)} ธุรกรรม — ` +
+        `ต้นทุน Point รวม ${fmtThb(totalThb)} จาก ${fmtInt(totalTxn)} ธุรกรรม — ` +
           'Cashback/Loyalty ผูกกับ Turnover เป็นต้นทุนตามสัดส่วน ควรดูคู่กับ CIn ในหน้าการเงิน',
       ];
       if (rows[0]) {
         insights.push(
-          `ประเภท ${rows[0].Type} กินงบสูงสุด (${fmtInt(rows[0].total_points)} point) — ` +
+          `ประเภท ${rows[0].Type} กินงบสูงสุด (${fmtThb(rows[0].total_points_THB)}) — ` +
             'ถ้าเป็น Referrer Reward Point ที่โตเร็วผิดปกติ ควรเช็คร่วมกับหน้า Referrer ว่าเป็น referral abuse หรือไม่',
         );
       }
       insights.push(
-        'Point ไม่ใช่จำนวนเงินบาท จึงไม่มีคอลัมน์ _THB คู่กัน — ตัวเลขในหน้านี้เป็นหน่วย point ตามไฟล์',
+        `คอลัมน์ "Point ดิบ" คือค่าตามไฟล์ Power BI ไว้ cross-check เท่านั้น (รวม ${fmtInt(totalPoints)}) — ` +
+          'ตัวเลขที่ใช้อ้างอิงคือช่องบาท ซึ่งแปลงด้วย pointsScaleFactor ของเว็บนี้เอง',
       );
 
       return {
         alerts: [],
         kpis: [
-          kpi('Point รวมที่จ่าย', totalPoints || null, NUMBER),
+          kpi('ต้นทุน Point รวม', totalThb || null, THB),
           kpi('จำนวนธุรกรรม', totalTxn || null, COUNT),
+          kpi('ต้นทุนเฉลี่ยต่อครั้ง', totalTxn ? totalThb / totalTxn : null, THB),
           kpi('ประเภท point ที่จ่าย', rows.length, COUNT),
           kpi('ประเภทที่กินงบสูงสุด', rows[0]?.Type ?? null, TEXT, {
-            note: rows[0] ? `${fmtInt(rows[0].total_points)} point` : undefined,
+            note: rows[0] ? fmtThb(rows[0].total_points_THB) : undefined,
+          }),
+          kpi('Point ดิบรวม (cross-check)', totalPoints || null, NUMBER, {
+            note: 'ค่าตามไฟล์ Power BI ก่อนแปลงสเกล — ห้ามรายงานเป็นจำนวนเงิน',
           }),
         ],
         charts: [
           {
             id: 'bonus-types',
             type: 'doughnut',
-            title: 'Point แยกตามประเภท',
+            title: 'ต้นทุน Point แยกตามประเภท (บาท)',
             labels: rows.map((row) => row.Type),
-            datasets: [{ label: 'point รวม', unit: NUMBER, data: rows.map((row) => row.total_points) }],
+            datasets: [
+              { label: 'ต้นทุน (บาท)', unit: THB, data: rows.map((row) => row.total_points_THB) },
+            ],
           },
           {
             id: 'bonus-daily',
             type: 'line',
-            title: 'Point ที่จ่ายรายวัน',
+            title: 'ต้นทุน Point รายวัน (บาท)',
             labels: series.labels,
             datasets: series.datasets,
           },
@@ -1532,12 +1576,15 @@ const SECTIONS = [
             title: 'รายละเอียดตามประเภท',
             columns: [
               { key: 'Type', label: 'ประเภท', unit: TEXT },
-              { key: 'total_points', label: 'Point รวม', unit: NUMBER },
+              { key: 'total_points_THB', label: 'ต้นทุนรวม', unit: THB },
               { key: 'transaction_count', label: 'จำนวนครั้ง', unit: COUNT },
-              { key: 'avg_points', label: 'เฉลี่ย/ครั้ง', unit: NUMBER },
+              { key: 'avg_thb', label: 'เฉลี่ย/ครั้ง', unit: THB },
+              { key: 'total_points', label: 'Point ดิบ', unit: NUMBER },
             ],
             rows,
-            note: 'Point ไม่ใช่จำนวนเงินบาท จึงไม่มีคอลัมน์ _THB คู่กัน',
+            note:
+              'ช่อง "Point ดิบ" คือค่าตามไฟล์ Power BI ไว้ cross-check — ' +
+              'ช่องบาทแปลงด้วย pointsScaleFactor ของเว็บนี้ ตอนที่ไฟล์ถูก parse ครั้งแรก',
           },
         ],
         insights,
@@ -1608,10 +1655,12 @@ export async function buildMonthlyPayload({ site, yearMonth, onProgress } = {}) 
   }
 
   const loaded = new Map();
+  const failures = new Map();
   for (const fileType of wanted) {
     if (!uploaded.has(fileType)) continue;
-    const entries = await loadRows({ site, yearMonth, fileType, onProgress });
+    const { entries, reason } = await loadRows({ site, yearMonth, fileType, onProgress });
     if (entries) loaded.set(fileType, entries);
+    else failures.set(fileType, reason);
   }
 
   const ctx = { site, yearMonth, bench: benchmarksFor(site), shared: BENCHMARKS.shared };
@@ -1634,7 +1683,11 @@ export async function buildMonthlyPayload({ site, yearMonth, onProgress } = {}) 
 
     const entries = loaded.get(section.fileType);
     if (!entries) {
-      sections.push({ ...base, available: false, reason: 'มีไฟล์อยู่ในระบบ แต่อ่านข้อมูลจากไฟล์ไม่ได้' });
+      sections.push({
+        ...base,
+        available: false,
+        reason: failures.get(section.fileType) ?? GENERIC_LOAD_FAILURE,
+      });
       continue;
     }
 
