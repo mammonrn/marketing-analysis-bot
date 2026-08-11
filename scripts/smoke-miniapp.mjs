@@ -18,6 +18,12 @@ import express from 'express';
 process.env.TELEGRAM_BOT_TOKEN ??= 'smoke-test';
 process.env.ANTHROPIC_API_KEY ??= 'smoke-test';
 
+// A throwaway PIN for this run only: the smoke test brings its own gate rather
+// than needing the operator's real DASHBOARD_PIN_HASH to be set.
+const SMOKE_PIN = 'smoke-pin-1234';
+const { hashPin } = await import('../src/miniapp/pin.js');
+process.env.DASHBOARD_PIN_HASH = hashPin(SMOKE_PIN);
+
 const { createRouter } = await import('../src/miniapp/routes.js');
 const store = await import('../src/session/store.js');
 
@@ -39,7 +45,7 @@ const token = store.createSummaryToken('smoke-chat', {
   metrics: [{ name: 'RTP', value: '96.1%', status: 'ปกติ' }],
 });
 
-const monthlyToken = store.createSummaryToken('smoke-chat', {
+const MONTHLY_PAYLOAD = {
   kind: 'monthly',
   generatedAt: new Date().toISOString(),
   site: 'shwe666',
@@ -67,6 +73,13 @@ const monthlyToken = store.createSummaryToken('smoke-chat', {
       tables: [],
     },
   ],
+};
+
+const monthlyToken = store.createMonthlyDashboardToken({
+  site: 'shwe666',
+  yearMonth: '2026-07',
+  chatId: 'smoke-chat',
+  payload: MONTHLY_PAYLOAD,
 });
 
 const app = express();
@@ -77,10 +90,10 @@ const base = `http://127.0.0.1:${server.address().port}`;
 
 const results = [];
 
-async function check(name, route, expectStatus, validate) {
+async function check(name, route, expectStatus, validate, { cookie } = {}) {
   let line;
   try {
-    const res = await fetch(base + route);
+    const res = await fetch(base + route, cookie ? { headers: { cookie } } : undefined);
     if (res.status !== expectStatus) {
       line = `FAIL ${name} — คาดว่า ${expectStatus} ได้ ${res.status}`;
     } else if (validate) {
@@ -126,12 +139,42 @@ await check('GET /miniapp/monthly (html)', '/miniapp/monthly', 200, (body) =>
 await check('GET monthly.js', '/miniapp/assets/monthly.js', 200, (body) =>
   body.includes('formatThb') ? null : 'เนื้อหา monthly.js ไม่ตรงที่คาด');
 
-await check('GET monthly payload', `/api/summary/${monthlyToken}`, 200, (body, res) => {
-  if (res.headers.get('cache-control') !== 'no-store') return 'ขาด header Cache-Control: no-store';
-  if (body.kind !== 'monthly') return 'payload ไม่ได้ทำเครื่องหมายว่าเป็นสรุปเดือน';
-  if (body.sections?.[0]?.kpis?.[0]?.unit !== 'thb') return 'หน่วยเงินใน payload ผิดรูป';
-  return null;
+// The monthly data sits behind the PIN gate. Both sides are worth smoking:
+// that a link with no PIN gets nothing, and that a correct PIN gets in.
+await check('GET monthly payload (ยังไม่กรอก PIN)', `/api/monthly/${monthlyToken}`, 401, (body) =>
+  body.error === 'pin_required' ? null : 'ไม่ได้ตอบว่าต้องกรอก PIN');
+
+const unlock = await fetch(`${base}/api/dashboard/pin`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ pin: SMOKE_PIN }),
 });
+const unlocked = String(unlock.headers.get('set-cookie') ?? '').split(';')[0];
+results.push(unlock.ok ? 'PASS POST /api/dashboard/pin (PIN ถูก)' : `FAIL POST /api/dashboard/pin — ได้ ${unlock.status}`);
+
+await check(
+  'GET monthly payload (กรอก PIN แล้ว)',
+  `/api/monthly/${monthlyToken}`,
+  200,
+  (body, res) => {
+    if (res.headers.get('cache-control') !== 'no-store') return 'ขาด header Cache-Control: no-store';
+    if (body.kind !== 'monthly') return 'payload ไม่ได้ทำเครื่องหมายว่าเป็นสรุปเดือน';
+    if (body.sections?.[0]?.kpis?.[0]?.unit !== 'thb') return 'หน่วยเงินใน payload ผิดรูป';
+    return null;
+  },
+  { cookie: unlocked },
+);
+
+const wrong = await fetch(`${base}/api/dashboard/pin`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ pin: 'definitely-not-the-pin' }),
+});
+results.push(
+  wrong.status === 401
+    ? 'PASS POST /api/dashboard/pin (PIN ผิดถูกปฏิเสธ)'
+    : `FAIL POST /api/dashboard/pin (PIN ผิด) — คาดว่า 401 ได้ ${wrong.status}`,
+);
 
 await check('GET summary with bad token', '/api/summary/not-a-real-token', 404);
 

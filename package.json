@@ -16,6 +16,7 @@
     "check:rows": "node scripts/check-dropped-rows.mjs",
     "measure:context": "node scripts/measure-context.mjs",
     "smoke": "node scripts/smoke-miniapp.mjs",
+    "hash:pin": "node scripts/hash-pin.mjs",
     "sync:skill": "bash scripts/sync-skill.sh",
     "test": "node --test test/*.test.js",
     "report:cache": "node scripts/report-cache.mjs",

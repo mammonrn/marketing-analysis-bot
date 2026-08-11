@@ -65,6 +65,25 @@ export function initDb(sqlitePath = config.session.sqlitePath) {
       created_at   INTEGER NOT NULL,
       consumed_at  INTEGER
     );
+
+    -- Separate from the summaries table because the lifetime differs by an order
+    -- of magnitude: a session payload is a one-hour capability handed to one
+    -- chat, a monthly dashboard is a link people forward to each other and
+    -- reopen for weeks. Keeping them in one table would mean one pruning rule
+    -- and one expiry for two very different things.
+    CREATE TABLE IF NOT EXISTS monthly_dashboards (
+      token        TEXT PRIMARY KEY,
+      site         TEXT NOT NULL,
+      year_month   TEXT NOT NULL,
+      chat_id      TEXT,
+      payload_json TEXT NOT NULL,
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+    -- One live link per (site, month): the uniqueness is what makes the token
+    -- reusable instead of a new one per tap.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_dashboards_key
+      ON monthly_dashboards(site, year_month);
   `);
 
   logger.info('session store ready', { path: sqlitePath });
@@ -198,8 +217,72 @@ export function readSummary(token, { maxAgeMinutes = 60 } = {}) {
   return safeParse(row.payload_json, null);
 }
 
+/**
+ * The monthly dashboard link, which is a different kind of thing from the
+ * session token above.
+ *
+ * Telegram strips `web_app` buttons out of a forwarded message, so the only
+ * copy of the link that survives a forward is the URL printed in the message
+ * body — and that URL is useless if the token behind it was single-use and
+ * expired in an hour. So this token is keyed by (site, month) and reused:
+ * every tap on "สรุปเดือน" for July/SH666 hands back the same URL with fresh
+ * data behind it, and every copy of that URL anyone forwarded keeps working
+ * until the link expires.
+ *
+ * Losing single-use is why the page in front of it now asks for a PIN
+ * (src/miniapp/pin.js) — the token alone is no longer treated as the secret.
+ *
+ * Hex rather than base64url: the URL is printed as plain text into a Markdown
+ * message, and `_` in a token is exactly what makes Telegram mangle it.
+ */
+export function createMonthlyDashboardToken(
+  { site, yearMonth, chatId, payload },
+  { ttlDays = config.dashboard.monthlyLinkDays } = {},
+) {
+  if (!site || !yearMonth) throw new Error('createMonthlyDashboardToken needs a site and a yearMonth');
+  const d = requireDb();
+  const ts = now();
+  const cutoff = ts - ttlDays * 86_400_000;
+
+  const existing = d
+    .prepare('SELECT token, created_at FROM monthly_dashboards WHERE site = ? AND year_month = ?')
+    .get(site, yearMonth);
+
+  // Refresh in place while the link is still live. Expiry is measured from
+  // when the token was first handed out, so re-running the report cannot keep
+  // one URL alive forever — past the TTL the row is replaced and old copies
+  // of the link stop resolving.
+  if (existing && existing.created_at > cutoff) {
+    d.prepare('UPDATE monthly_dashboards SET payload_json = ?, chat_id = ?, updated_at = ? WHERE token = ?')
+      .run(JSON.stringify(payload), chatId == null ? null : String(chatId), ts, existing.token);
+    return existing.token;
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const tx = d.transaction(() => {
+    if (existing) d.prepare('DELETE FROM monthly_dashboards WHERE token = ?').run(existing.token);
+    d.prepare(
+      `INSERT INTO monthly_dashboards (token, site, year_month, chat_id, payload_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(token, site, yearMonth, chatId == null ? null : String(chatId), JSON.stringify(payload), ts, ts);
+  });
+  tx();
+  return token;
+}
+
+export function readMonthlyDashboard(token, { ttlDays = config.dashboard.monthlyLinkDays } = {}) {
+  const row = requireDb().prepare('SELECT * FROM monthly_dashboards WHERE token = ?').get(String(token ?? ''));
+  if (!row) return null;
+  if (now() - row.created_at > ttlDays * 86_400_000) return null;
+  return safeParse(row.payload_json, null);
+}
+
 /** Housekeeping so the file does not grow without bound on a small VPS. */
-export function pruneOldData({ summaryDays = 7, archiveDays = 90 } = {}) {
+export function pruneOldData({
+  summaryDays = 7,
+  archiveDays = 90,
+  monthlyLinkDays = config.dashboard.monthlyLinkDays,
+} = {}) {
   const d = requireDb();
   const summaries = d
     .prepare('DELETE FROM summaries WHERE created_at < ?')
@@ -207,10 +290,16 @@ export function pruneOldData({ summaryDays = 7, archiveDays = 90 } = {}) {
   const archive = d
     .prepare('DELETE FROM turn_archive WHERE archived_at < ?')
     .run(now() - archiveDays * 86_400_000);
-  if (summaries.changes || archive.changes) {
+  // Expired links are already refused by readMonthlyDashboard; this is only so
+  // the file does not carry dead rows forever.
+  const monthly = d
+    .prepare('DELETE FROM monthly_dashboards WHERE created_at < ?')
+    .run(now() - monthlyLinkDays * 86_400_000);
+  if (summaries.changes || archive.changes || monthly.changes) {
     logger.info('pruned old session data', {
       summaries: summaries.changes,
       archivedTurns: archive.changes,
+      monthlyDashboards: monthly.changes,
     });
   }
 }

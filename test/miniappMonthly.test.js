@@ -8,10 +8,13 @@ import express from 'express';
 process.env.TELEGRAM_BOT_TOKEN ??= 'test-token';
 process.env.ANTHROPIC_API_KEY ??= 'test-key';
 
+const PIN = '135790';
+
 let tmpDir;
 let store;
 let server;
 let base;
+let unlocked;
 
 const MONTHLY_PAYLOAD = {
   kind: 'monthly',
@@ -47,6 +50,12 @@ const MONTHLY_PAYLOAD = {
 before(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ads-analytics-miniapp-'));
   process.env.DATA_DIR = tmpDir;
+
+  // The monthly data route is behind the PIN gate; dashboardPin.test.js owns
+  // the gate's own behaviour, this file just needs to be able to get past it.
+  const pin = await import('../src/miniapp/pin.js');
+  process.env.DASHBOARD_PIN_HASH = pin.hashPin(PIN);
+  unlocked = `dash_pin=${pin.mintPinSession()}`;
 
   const { createRouter } = await import('../src/miniapp/routes.js');
   store = await import('../src/session/store.js');
@@ -93,22 +102,44 @@ test('the monthly renderer is served as a static asset', async () => {
   assert.ok(body.includes('formatThb'), 'money formatting is in the bundle');
 });
 
-test('a monthly payload round-trips through the existing token route unchanged', async () => {
-  // The point of this test: the monthly dashboard adds no auth of its own. It
-  // reuses `createSummaryToken` and `/api/summary/:token` exactly as the
-  // session dashboard does.
-  const token = store.createSummaryToken('chat-1', MONTHLY_PAYLOAD);
+test('a monthly payload round-trips through the monthly route unchanged', async () => {
+  const token = store.createMonthlyDashboardToken({
+    site: 'shwe666',
+    yearMonth: '2026-07',
+    chatId: 'chat-1',
+    payload: MONTHLY_PAYLOAD,
+  });
 
-  const res = await fetch(`${base}/api/summary/${token}`);
+  const res = await fetch(`${base}/api/monthly/${token}`, { headers: { cookie: unlocked } });
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('cache-control'), 'no-store');
   assert.deepEqual(await res.json(), MONTHLY_PAYLOAD);
 });
 
-test('a bad or expired monthly token is refused the same way as any other', async () => {
-  const res = await fetch(`${base}/api/summary/not-a-real-token`);
+test('a bad or expired monthly token is refused even by an unlocked browser', async () => {
+  const res = await fetch(`${base}/api/monthly/not-a-real-token`, { headers: { cookie: unlocked } });
   assert.equal(res.status, 404);
   assert.equal((await res.json()).error, 'not_found');
+});
+
+test('the session route is not a way around the monthly PIN gate', async () => {
+  // The two stores are separate on purpose: a monthly token must not resolve
+  // through `/api/summary/:token`, which has no PIN in front of it.
+  const token = store.createMonthlyDashboardToken({
+    site: 'ubet89',
+    yearMonth: '2026-07',
+    payload: MONTHLY_PAYLOAD,
+  });
+
+  assert.equal((await fetch(`${base}/api/summary/${token}`)).status, 404);
+});
+
+test('the session dashboard keeps its own token route, ungated', async () => {
+  const token = store.createSummaryToken('chat-1', { summaryText: 'ok' });
+
+  const res = await fetch(`${base}/api/summary/${token}`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { summaryText: 'ok' });
 });
 
 test('the monthly page needs no token of its own to be served', async () => {

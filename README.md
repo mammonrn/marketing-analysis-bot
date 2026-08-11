@@ -23,7 +23,8 @@ Excel ดิบเข้าแชทบอทโดยตรงทุกสิ�
 ```bash
 npm run check:skill    # ต้องได้ "✅ พร้อม deploy" (9/9 ไฟล์)
 npm test               # unit tests (sites/transform/fileTypes/query/ingest/fraud/envelope/...)
-npm run smoke          # เช็คว่า Mini App เสิร์ฟได้ครบทุก route
+npm run smoke          # เช็คว่า Mini App เสิร์ฟได้ครบทุก route (รวม PIN gate)
+npm run hash:pin       # สร้าง DASHBOARD_PIN_HASH สำหรับ PIN ของ dashboard สรุปเดือน
 ```
 
 ---
@@ -44,9 +45,10 @@ telegraf (polling หรือ webhook)
    ├─ Anthropic            src/claude/client.js       system prompt = ไฟล์ skill ต่อกันแบบ verbatim
    │    └─ fraud guard     src/fraud/guard.js         บังคับโครงสร้าง 5 ส่วน + กันการฟันธง
    ├─ monthly report       src/session/monthlyReport.js  รวม raw_files ทั้งเดือน → payload 11 หมวด
-   └─ Mini App             src/miniapp/routes.js      Chart.js (vendored) ผ่าน token ใช้ครั้งเดียว
-        ├─ /miniapp            สรุป session (public/miniapp/index.html)
-        └─ /miniapp/monthly    สรุปเดือนแบบ tab (public/miniapp/monthly.html)
+   └─ Mini App             src/miniapp/routes.js      Chart.js (vendored)
+        ├─ /miniapp            สรุป session (public/miniapp/index.html) — token ใช้ครั้งเดียว อายุ 1 ชม.
+        ├─ /miniapp/monthly    สรุปเดือนแบบ tab (public/miniapp/monthly.html) — ลิงก์ส่งต่อได้ + PIN
+        └─ PIN gate            src/miniapp/pin.js         scrypt hash + cookie + ล็อกเมื่อเดา PIN
 ```
 
 ### เมนูปุ่ม (`/menu` หรือ `/start`)
@@ -56,7 +58,7 @@ telegraf (polling หรือ webhook)
 | ปุ่ม | ทำอะไร |
 |---|---|
 | 📊 ดูตัวเลขด่วน | เลือก 1 ใน 6 metric (BIn / DAU / RTP / New Mems / VIP Active% / Bonus Cost) → เว็บ → เดือน → ตอบแบบ Conversational Mode ปกติ |
-| 📈 สรุปเดือน | เลือกเว็บ → เดือน → ปุ่มเปิด Dashboard เต็ม 11 หมวด |
+| 📈 สรุปเดือน | เลือกเว็บ → เดือน → ปุ่มเปิด Dashboard เต็ม 11 หมวด + ลิงก์ที่ forward ต่อได้ (ต้องกรอก PIN) |
 | 📋 สรุป session นี้ | เท่ากับ `/สรุป` เดิม |
 
 ทุกเมนูย่อยมีปุ่ม **❌ ยกเลิก** อยู่แถวสุดท้ายเสมอ กดแล้วเคลียร์ตัวเลือกที่ค้างอยู่
@@ -103,7 +105,29 @@ SH666 และกลับกัน)
 ตายตัวหน้าเดียว (ข้อความสรุป + กราฟ 1 อัน + ตาราง metric) ส่วนหน้านี้เป็น tab 11 หมวด
 ที่แต่ละหมวดมี KPI/กราฟ/ตารางของตัวเอง — รวมกันแปลว่าต้องมี `if (payload.kind)` อยู่หัวทุก
 ฟังก์ชันใน `app.js` และแบก CSS สองชุดในไฟล์เดียวโดยไม่มี markup ร่วมกันเลย ส่วนที่ควรใช้ร่วม
-ใช้ร่วมอยู่แล้ว: token, route `/api/summary/:token` และ Chart.js ที่ vendor ไว้
+ใช้ร่วมอยู่แล้ว: Chart.js ที่ vendor ไว้ และหน้า HTML ที่เป็นเปลือกเปล่าจนกว่า fetch จะสำเร็จ
+
+### ลิงก์สรุปเดือนที่ forward ได้ + PIN
+
+Telegram **ตัดปุ่ม `web_app` ทิ้งเวลามีคน forward ข้อความต่อ** คนที่รับต่อจึงกดเปิด dashboard
+ไม่ได้เลย — เป็นที่มาของสามอย่างที่ต้องอ่านคู่กัน:
+
+| ของเดิม | ตอนนี้ | เพราะ |
+|---|---|---|
+| token สุ่มใหม่ทุกครั้ง ใช้ครั้งเดียว อายุ 1 ชม. | token ผูกกับ (เว็บ, เดือน) ใช้ซ้ำได้ อายุ `MONTHLY_LINK_DAYS` = 60 วัน (`createMonthlyDashboardToken`) | ลิงก์ที่ forward ไปแล้วต้องยังเปิดได้ และสั่งสรุปเดือนใหม่ต้องไม่ทำให้ลิงก์เก่าตาย (payload อัปเดตทับ token เดิม) |
+| มีแต่ปุ่ม | ปุ่ม + บรรทัด `🔗 ลิงก์: https://...` ในเนื้อข้อความ | URL ที่เป็นข้อความคือทางเดียวที่รอดจากการ forward — token เลยเป็น hex ไม่ใช่ base64url เพราะ `_` ทำให้ Markdown ของ Telegram เพี้ยน |
+| token = ความลับ | PIN = ความลับ (`src/miniapp/pin.js`) | ลิงก์ที่ส่งต่อได้ = ลิงก์ที่หลุดไปไหนก็ได้ |
+
+PIN ตัวเดียวใช้ร่วมทุกเว็บ เก็บเป็น scrypt hash ใน `DASHBOARD_PIN_HASH` (สร้างด้วย
+`npm run hash:pin` — ไม่มีที่ไหนเก็บ PIN ตรง ๆ และ log ไม่เคยพิมพ์ทั้ง PIN และ token เต็ม)
+scrypt ไม่ใช่ bcrypt เพราะ `node:crypto` มีมาให้แล้ว ไม่ต้องเพิ่ม dependency หรือ compile
+native module บน VPS กรอกถูกแล้วได้ cookie HttpOnly อายุ 12 ชม. ที่เซ็นด้วยคีย์ซึ่ง derive
+มาจากตัว hash เอง — เปลี่ยน PIN ทีเดียว cookie เก่าตายทั้งหมด กรอกผิดติดกัน 5 ครั้งล็อก IP
+นั้น 15 นาที และระหว่างล็อกกรอกถูกก็ยังไม่ให้เข้า (ไม่งั้นการล็อกจะกันได้แค่คนที่เดาไม่ถูก)
+
+ข้อมูลเดือนอยู่หลัง `/api/monthly/:token` ซึ่งผ่าน PIN ส่วน `/api/summary/:token` ของสรุป
+session ไม่แตะเลย — token ของมันยังใช้ครั้งเดียวและอยู่ในแชทเสมอ ทั้งสอง route อ่านคนละตาราง
+เพื่อให้ token สรุปเดือนไม่มีทางลอดออกทาง route ที่ไม่มี PIN (`test/miniappMonthly.test.js`)
 
 หน่วยเงิน/เปอร์เซ็นต์อ่านจากคอลัมน์ `_THB` / `_pct` ที่ pipeline แปลงให้แล้วเท่านั้น
 (รวม `total_points_THB` ของ point log ที่แปลงด้วย `pointsScaleFactor` ของแต่ละเว็บ) ไม่มี

@@ -62,6 +62,26 @@ export const config = {
     sqlitePath: path.resolve(ROOT, process.env.SQLITE_PATH || './data/sessions.sqlite'),
   },
 
+  // The monthly dashboard link is meant to be forwarded, so it outlives the
+  // chat message it came in — which is exactly why it needs a PIN in front of
+  // it. See src/miniapp/pin.js for the hash format and scripts/hash-pin.mjs to
+  // produce one.
+  dashboard: {
+    // A getter, not a snapshot: rotating the PIN then restarting is the normal
+    // path, but reading it per call also lets the tests exercise the
+    // "not configured" branch without re-importing the whole config module.
+    get pinHash() {
+      return process.env.DASHBOARD_PIN_HASH || '';
+    },
+    // How long a correct PIN is remembered in the browser.
+    sessionHours: int('DASHBOARD_SESSION_HOURS', 12),
+    // Wrong PINs in a row before that client is locked out.
+    maxPinAttempts: int('DASHBOARD_PIN_MAX_ATTEMPTS', 5),
+    lockoutMinutes: int('DASHBOARD_PIN_LOCKOUT_MINUTES', 15),
+    // How long a forwarded monthly link keeps working.
+    monthlyLinkDays: int('MONTHLY_LINK_DAYS', 60),
+  },
+
   // Raw Excel files users upload in chat (spec §3B) — replaces the old
   // Google Sheets/Drive read integration entirely.
   data: {

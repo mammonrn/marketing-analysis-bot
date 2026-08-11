@@ -46,6 +46,7 @@ import {
   countTurns,
   getTurns,
   createSummaryToken,
+  createMonthlyDashboardToken,
 } from '../session/store.js';
 import { runSummary, offerSummary, SUMMARY_YES, SUMMARY_NO } from '../session/summary.js';
 import { buildMonthlyPayload } from '../session/monthlyReport.js';
@@ -738,7 +739,8 @@ async function runMonthlyDashboard(ctx, { site, yearMonth }) {
     );
   }
 
-  const token = createSummaryToken(chatId, payload);
+  const token = createMonthlyDashboardToken({ site, yearMonth, chatId, payload });
+  const url = `${config.http.publicUrl}/miniapp/monthly?token=${token}`;
   const ready = payload.sections.filter((section) => section.available);
 
   const lines = [
@@ -755,18 +757,20 @@ async function runMonthlyDashboard(ctx, { site, yearMonth }) {
     );
   }
 
-  lines.push('', 'กดปุ่มด้านล่างเพื่อเปิด Dashboard เต็มครับ');
+  // The URL goes in the message body as well as on the button. Telegram strips
+  // `web_app` buttons out of a forwarded message, so for anyone who receives
+  // this second-hand the printed link is the only way in — and it is why the
+  // link now lives for weeks and asks for a PIN instead of trusting the token.
+  lines.push(
+    '',
+    'กดปุ่มด้านล่างเพื่อเปิด Dashboard เต็มครับ',
+    `🔗 ลิงก์: ${url}`,
+    `(ส่งต่อลิงก์นี้ได้ ใช้ได้ ${config.dashboard.monthlyLinkDays} วัน — ต้องกรอก PIN ก่อนดูข้อมูล)`,
+  );
 
   return sendSafe(ctx.telegram, chatId, lines.join('\n'), {
     reply_markup: {
-      inline_keyboard: [
-        [
-          {
-            text: '📈 เปิด Dashboard',
-            web_app: { url: `${config.http.publicUrl}/miniapp/monthly?token=${token}` },
-          },
-        ],
-      ],
+      inline_keyboard: [[{ text: '📈 เปิด Dashboard', web_app: { url } }]],
     },
   });
 }

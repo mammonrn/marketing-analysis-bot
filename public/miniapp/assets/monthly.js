@@ -22,6 +22,7 @@
   var errorEl = document.getElementById('error');
   var panelEl = document.getElementById('panel');
   var tabsEl = document.getElementById('tabs');
+  var gateEl = document.getElementById('pin-gate');
 
   /* Chart instances of the tab being replaced. Chart.js keeps a registry keyed
      by canvas, so leaving these attached leaks a listener per tab switch and
@@ -32,6 +33,7 @@
     errorEl.textContent = message;
     errorEl.hidden = false;
     contentEl.hidden = true;
+    gateEl.hidden = true;
   }
 
   function el(tag, className, text) {
@@ -486,21 +488,100 @@
     contentEl.hidden = false;
   }
 
+  // --- PIN gate --------------------------------------------------------------
+
+  /* The link to this page is meant to be forwarded, so arriving here proves
+     nothing. Data is fetched first and the form only appears if the server
+     says a PIN is missing — that way someone who already unlocked it in this
+     browser goes straight to the report. */
+
   var token = new URLSearchParams(window.location.search).get('token');
+
+  var formEl = document.getElementById('pin-form');
+  var inputEl = document.getElementById('pin-input');
+  var submitEl = document.getElementById('pin-submit');
+  var pinErrorEl = document.getElementById('pin-error');
+
+  function showGate(message) {
+    contentEl.hidden = true;
+    errorEl.hidden = true;
+    gateEl.hidden = false;
+    if (message) {
+      pinErrorEl.textContent = message;
+      pinErrorEl.hidden = false;
+    } else {
+      pinErrorEl.hidden = true;
+    }
+    inputEl.focus();
+  }
+
+  function readMessage(res, fallback) {
+    return res
+      .json()
+      .then(function (body) {
+        return (body && body.message) || fallback;
+      })
+      .catch(function () {
+        return fallback;
+      });
+  }
+
+  function loadDashboard() {
+    return fetch('/api/monthly/' + encodeURIComponent(token), { credentials: 'same-origin' })
+      .then(function (res) {
+        if (res.status === 401) return showGate('');
+        if (res.status === 503 || res.status === 429) {
+          return readMessage(res, 'เปิดดูข้อมูลไม่ได้ตอนนี้').then(fail);
+        }
+        if (!res.ok) {
+          return readMessage(
+            res,
+            res.status === 404 ? 'ลิงก์หมดอายุหรือไม่ถูกต้อง' : 'โหลดข้อมูลไม่สำเร็จ',
+          ).then(fail);
+        }
+        return res.json().then(function (payload) {
+          gateEl.hidden = true;
+          render(payload);
+        });
+      })
+      .catch(function (err) {
+        fail(err.message || 'เกิดข้อผิดพลาด');
+      });
+  }
+
+  formEl.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var pin = inputEl.value;
+    if (!pin) return;
+
+    submitEl.disabled = true;
+    pinErrorEl.hidden = true;
+
+    fetch('/api/dashboard/pin', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin }),
+    })
+      .then(function (res) {
+        // Cleared either way: a wrong PIN should not be left on screen, and a
+        // right one has already been exchanged for a cookie.
+        inputEl.value = '';
+        if (res.ok) return loadDashboard();
+        return readMessage(res, 'PIN ไม่ถูกต้อง').then(showGate);
+      })
+      .catch(function () {
+        showGate('ติดต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง');
+      })
+      .then(function () {
+        submitEl.disabled = false;
+      });
+  });
+
   if (!token) {
     fail('ไม่พบ token — กรุณาเปิดจากปุ่มในแชท');
     return;
   }
 
-  fetch('/api/summary/' + encodeURIComponent(token))
-    .then(function (res) {
-      if (!res.ok) {
-        throw new Error(res.status === 404 ? 'ลิงก์หมดอายุหรือไม่ถูกต้อง' : 'โหลดข้อมูลไม่สำเร็จ');
-      }
-      return res.json();
-    })
-    .then(render)
-    .catch(function (err) {
-      fail(err.message || 'เกิดข้อผิดพลาด');
-    });
+  loadDashboard();
 })();

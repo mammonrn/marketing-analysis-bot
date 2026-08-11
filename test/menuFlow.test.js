@@ -233,13 +233,48 @@ test('the monthly flow ends with a Mini App link to the monthly page', async () 
 
   // The token resolves to the payload the page will render.
   const token = new URL(button.web_app.url).searchParams.get('token');
-  const payload = store.readSummary(token);
+  const payload = store.readMonthlyDashboard(token);
   assert.equal(payload.kind, 'monthly');
   assert.equal(payload.yearMonth, '2026-07');
   assert.equal(payload.siteName, 'SH666');
 
   // And the flow is finished, not left half-open.
   assert.equal(db.getMenuSelection(CHAT), null);
+});
+
+test('the same URL is printed in the message body, because a forward loses the button', async () => {
+  const ctx = makeCtx();
+
+  await bot.press(actions.monthly, ctx);
+  await bot.press('menu:site:shwe666', ctx);
+  await bot.press('menu:month:2026-07', ctx);
+
+  const message = last(ctx);
+  const url = buttonsOf(message)[0].web_app.url;
+
+  assert.ok(message.text.includes(`🔗 ลิงก์: ${url}`), 'the link is readable without the button');
+  assert.match(message.text, /ต้องกรอก PIN/, 'and says why it still asks for something');
+  // Markdown-hostile characters in the token would get the URL mangled or the
+  // whole message rejected — Telegram sees this text as Markdown.
+  assert.match(url, /token=[0-9a-f]{64}$/);
+});
+
+test('a second run of the same month reuses the link that was already shared', async () => {
+  const first = makeCtx();
+  await bot.press(actions.monthly, first);
+  await bot.press('menu:site:shwe666', first);
+  await bot.press('menu:month:2026-07', first);
+
+  const second = makeCtx();
+  await bot.press(actions.monthly, second);
+  await bot.press('menu:site:shwe666', second);
+  await bot.press('menu:month:2026-07', second);
+
+  assert.equal(
+    buttonsOf(last(second))[0].web_app.url,
+    buttonsOf(last(first))[0].web_app.url,
+    'anyone holding the forwarded link keeps working after the report is re-run',
+  );
 });
 
 test('the monthly message names the files that would fill the empty tabs', async () => {

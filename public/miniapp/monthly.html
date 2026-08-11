@@ -203,6 +203,50 @@
       .note { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.5; }
       .empty-state { color: var(--muted); }
 
+      /* The PIN gate. Deliberately the whole screen: this page is reachable by
+         anyone holding a forwarded link, so nothing of the report — not even a
+         month name or a site — is on screen behind it. */
+      #pin-gate {
+        max-width: 320px;
+        margin: 12vh auto 0;
+        text-align: center;
+      }
+      #pin-gate h1 { margin-bottom: 6px; }
+      .pin-lead { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+      #pin-input {
+        width: 100%;
+        padding: 12px 14px;
+        font-size: 20px;
+        font-family: inherit;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.35em;
+        text-align: center;
+        color: var(--fg);
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+      }
+      #pin-submit {
+        width: 100%;
+        margin-top: 12px;
+        padding: 12px 14px;
+        font-size: 15px;
+        font-family: inherit;
+        font-weight: 600;
+        color: var(--accent-fg);
+        background: var(--accent);
+        border: none;
+        border-radius: 12px;
+        cursor: pointer;
+      }
+      #pin-submit[disabled] { opacity: 0.6; cursor: default; }
+      #pin-error {
+        margin: 12px 0 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--bad);
+      }
+
       #error { text-align: center; padding: 48px 16px; color: var(--muted); }
 
       [hidden] { display: none !important; }
@@ -210,6 +254,23 @@
   </head>
   <body>
     <div id="error" hidden></div>
+
+    <div id="pin-gate" hidden>
+      <form id="pin-form">
+        <h1>🔒 สรุปเดือน</h1>
+        <p class="pin-lead">กรอก PIN เพื่อเปิดดูข้อมูล</p>
+        <input
+          id="pin-input"
+          type="password"
+          inputmode="numeric"
+          autocomplete="current-password"
+          enterkeyhint="go"
+          aria-label="PIN"
+        />
+        <button type="submit" id="pin-submit">เข้าดู Dashboard</button>
+        <p id="pin-error" hidden></p>
+      </form>
+    </div>
 
     <div id="content" hidden>
       <header>
