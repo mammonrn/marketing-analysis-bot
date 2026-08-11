@@ -516,6 +516,10 @@ const SECTIONS = [
         alerts: [],
         kpis: [
           kpi('Revenue รวม', sum(records, 'R_THB'), THB),
+          // Both "R / BIn" and "Bonus x% ของ BIn" below are quoted against a
+          // denominator this tab never showed, which leaves a reader unable to
+          // check either of them.
+          kpi('BIn รวม', binTotal, THB, { note: 'ตัวหารของ R/BIn และ Bonus/BIn ด้านล่าง' }),
           kpi('วันที่ Revenue ติดลบ', negativeDays, COUNT, {
             note: `จาก ${entries.length} วัน — ปกติของธุรกิจนี้ถ้าไม่ติดกันหลายวัน`,
           }),
