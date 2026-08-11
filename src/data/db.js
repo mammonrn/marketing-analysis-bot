@@ -20,6 +20,10 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+// For `dateColumn` only — which file types are a dated time series and so
+// cannot legitimately hold a row without a date. `fileTypes.js` imports
+// nothing from here, so this introduces no cycle.
+import { getFileType } from './fileTypes.js';
 
 let db;
 
@@ -283,14 +287,41 @@ export function insertParsedRows(rawFileId, { fileType, site, yearMonth, rows })
   tx(rows);
 }
 
-/** Rows for a site/file-type across up to `monthsBack` calendar months (spec §3B comparison scope). */
+/**
+ * Rows for a site/file-type across up to `monthsBack` calendar months (spec
+ * §3B comparison scope).
+ *
+ * On a dated time series, a row with no `row_date` is Power BI furniture — the
+ * `Total` row holding the month's own sums, or the `Applied filters:` trailer.
+ * `dropNonDataRows` has discarded both at the read since PR #9, so a file
+ * parsed after that never produces one. Rows parsed *before* it are still in
+ * the table, and `parsed = 1` means they are never re-read: the month sits
+ * there permanently carrying a 32nd "day" whose figures are the other 31 added
+ * up. Every sum over it comes out roughly doubled and every maximum ~31x a
+ * real day.
+ *
+ * The guard therefore belongs here rather than in either caller. Both
+ * `query.js` and `session/monthlyReport.js` were affected — the dashboard
+ * visibly, the chat path latently, escaping only because a monthly export is
+ * 33 rows and slips under `DETAIL_ROW_LIMIT` into the send-every-row branch
+ * instead of the statistics one. One filter at the single point they share
+ * fixes both, and any future consumer with them.
+ *
+ * Conditional on `dateColumn`, and that is load-bearing: the snapshot exports
+ * (vip, brand_game_value, referrer, ad_agent, the hour pivots) have no date
+ * axis at all, so `row_date` is null on every one of their rows. Filtering
+ * unconditionally would return nothing for them and blank half the dashboard.
+ */
 export function queryParsedRows({ site, fileType, yearMonths }) {
   const d = requireDb();
   const placeholders = yearMonths.map(() => '?').join(',');
+  const datedSeries = Boolean(getFileType(fileType)?.dateColumn);
+
   return d
     .prepare(
       `SELECT * FROM parsed_rows
        WHERE site = ? AND file_type = ? AND year_month IN (${placeholders})
+         ${datedSeries ? 'AND row_date IS NOT NULL' : ''}
        ORDER BY year_month, row_date`,
     )
     .all(site, fileType, ...yearMonths)
