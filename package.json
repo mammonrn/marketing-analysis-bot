@@ -19,7 +19,8 @@
     "sync:skill": "bash scripts/sync-skill.sh",
     "test": "node --test test/*.test.js",
     "report:cache": "node scripts/report-cache.mjs",
-    "report:sessions": "node scripts/report-sessions.mjs"
+    "report:sessions": "node scripts/report-sessions.mjs",
+    "reparse": "node scripts/reparse.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",

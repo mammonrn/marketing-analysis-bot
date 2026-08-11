@@ -217,6 +217,45 @@ test('the finance tab shows the BIn its own ratios are quoted against', async ()
   assert.equal(bin.unit, 'thb');
 });
 
+// --- the cleanup helpers -----------------------------------------------------
+
+test('countParsedRows sees the furniture that queryParsedRows hides', () => {
+  // The whole point of it: a caller trying to find stale rows cannot use the
+  // reader that filters them out.
+  const raw = seedWithFurniture({ yearMonth: '2026-03' });
+  const counts = db.countParsedRows(raw.id);
+
+  assert.deepEqual(counts, { total: 33, dated: 31, dateless: 2 });
+  assert.equal(
+    db.queryParsedRows({ site: SITE, fileType: 'daily_value', yearMonths: ['2026-03'] }).length,
+    31,
+    'the reader still hides them',
+  );
+});
+
+test('deleteParsedRows drops one file cache and reports the size', () => {
+  const raw = seedWithFurniture({ yearMonth: '2026-02' });
+  const other = seedWithFurniture({ yearMonth: '2026-01' });
+
+  assert.equal(db.deleteParsedRows(raw.id), 33);
+  assert.equal(db.countParsedRows(raw.id).total, 0);
+  // Scoped to the one file — the neighbouring month is untouched.
+  assert.equal(db.countParsedRows(other.id).total, 33);
+  // Idempotent, so a re-run of the cleanup script is harmless.
+  assert.equal(db.deleteParsedRows(raw.id), 0);
+});
+
+test('markUnparsed sends a file back through parsing on its next read', () => {
+  const raw = seedWithFurniture({ yearMonth: '2025-12' });
+  assert.equal(db.getRawFile(raw.id).parsed, 1);
+
+  db.markUnparsed(raw.id);
+  assert.equal(db.getRawFile(raw.id).parsed, 0);
+
+  db.markParsed(raw.id);
+  assert.equal(db.getRawFile(raw.id).parsed, 1);
+});
+
 // --- the chat path -----------------------------------------------------------
 
 test('the chat path summary block is also free of the Total row', async () => {
