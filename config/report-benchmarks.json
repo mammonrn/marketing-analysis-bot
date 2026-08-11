@@ -1,0 +1,76 @@
+{
+  "_comment": [
+    "Benchmarks for the monthly dashboard, copied from the skill reference files.",
+    "",
+    "Per-site, because SKILL.md is explicit that benchmarks must not be mixed across",
+    "sites ('ห้ามใช้ benchmark ปนกันข้ามเว็บ') — SH666 is ~1 year old and Burmese, U89 is",
+    "9+ years and Thai, 88F is ~5 years and Thai, and their normal ranges genuinely",
+    "differ. A KPI with no documented value for a site carries null and is shown",
+    "without a benchmark note rather than borrowing another site's.",
+    "",
+    "Sources, so these can be re-checked when the reference files are next updated:",
+    "  shwe666  → references/casino-metrics.md §2-6, references/new-member-quality.md",
+    "  ubet89   → references/u89-metrics.md, references/new-member-quality.md",
+    "  88fed    → references/88fed-metrics.md",
+    "  shared   → references/vip-members.md, references/deposit-count-distribution.md,",
+    "             references/deposit-detail.md — those three files declare themselves",
+    "             'ใช้กับ shwe666 / ubet89 / 88fed', so their figures are site-independent.",
+    "",
+    "Percentages here are already percentages (95.85 = 95.85%), matching the `_pct`",
+    "columns the pipeline produces. Head-count figures are people per day."
+  ],
+
+  "shared": {
+    "vipActivePct": { "good": 60.1, "urgent": 55 },
+    "vipLostPctWarn": 40,
+    "powerUserIndexPct": 56,
+    "plus21Pct": 47,
+    "casualPctMax": 25,
+    "depositSuccessPct": { "good": 95, "warn": 85 }
+  },
+
+  "sites": {
+    "shwe666": {
+      "rtpMedianPct": 95.85,
+      "rtpNormalPct": [92, 98],
+      "rtpOver100YearPct": 14,
+      "rBinMedianPct": 24,
+      "rBinGoodPct": 25,
+      "rBinWarnPct": 10,
+      "dauMean": 473,
+      "binMemsMean": 409,
+      "verifyPct": 74.8,
+      "firstNewPct": 11.0,
+      "firstNewNpPct": 85.2,
+      "delayedPerDay": 32
+    },
+    "ubet89": {
+      "rtpMedianPct": 96.7,
+      "rtpNormalPct": [94, 98],
+      "rtpOver100YearPct": 3,
+      "rBinMedianPct": 17,
+      "rBinGoodPct": 20,
+      "rBinWarnPct": 9,
+      "dauMean": 1062,
+      "binMemsMean": 830,
+      "verifyPct": 66.0,
+      "firstNewPct": 18.4,
+      "firstNewNpPct": 91.7,
+      "delayedPerDay": 7
+    },
+    "88fed": {
+      "rtpMedianPct": 96.1,
+      "rtpNormalPct": [92, 98],
+      "rtpOver100YearPct": 13,
+      "rBinMedianPct": 25,
+      "rBinGoodPct": 25,
+      "rBinWarnPct": 3,
+      "dauMean": 312,
+      "binMemsMean": 203,
+      "verifyPct": 64.8,
+      "firstNewPct": 12.9,
+      "firstNewNpPct": 88.5,
+      "delayedPerDay": null
+    }
+  }
+}

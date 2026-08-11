@@ -39,6 +39,36 @@ const token = store.createSummaryToken('smoke-chat', {
   metrics: [{ name: 'RTP', value: '96.1%', status: 'ปกติ' }],
 });
 
+const monthlyToken = store.createSummaryToken('smoke-chat', {
+  kind: 'monthly',
+  generatedAt: new Date().toISOString(),
+  site: 'shwe666',
+  siteName: 'SH666',
+  yearMonth: '2026-07',
+  currency: { currency: 'MMK', scaleFactor: 1000, fxRate: 0.787, fxRateAsOf: '2026-08-07', needsFxConversion: true },
+  missingFiles: [{ fileType: 'referrer', label: 'Referrer' }],
+  sections: [
+    {
+      id: 'overview',
+      title: 'Overview',
+      fileType: 'daily_value',
+      fileLabel: 'Daily Value',
+      available: true,
+      kpis: [{ label: 'BIn รวมทั้งเดือน', value: 472200, unit: 'thb' }],
+      charts: [
+        {
+          id: 'overview-daily',
+          type: 'line',
+          title: 'BIn รายวัน (บาท)',
+          labels: ['1', '2', '3'],
+          datasets: [{ label: 'BIn', unit: 'thb', data: [78700, 157400, 236100] }],
+        },
+      ],
+      tables: [],
+    },
+  ],
+});
+
 const app = express();
 app.use(createRouter());
 const server = app.listen(0);
@@ -85,6 +115,21 @@ await check('GET summary payload', `/api/summary/${token}`, 200, (body, res) => 
   if (res.headers.get('cache-control') !== 'no-store') return 'ขาด header Cache-Control: no-store';
   if (body.chart?.datasets?.[0]?.data?.length !== 3) return 'chart payload ผิดรูป';
   if (body.sites?.[0] !== 'SH666') return 'ไม่มีข้อมูล sites';
+  return null;
+});
+
+await check('GET /miniapp/monthly (html)', '/miniapp/monthly', 200, (body) =>
+  body.includes('chart.umd.min.js') && body.includes('assets/monthly.js') && body.includes('id="tabs"')
+    ? null
+    : 'HTML ของหน้าสรุปเดือนไม่ครบ (chart.js / monthly.js / tab strip)');
+
+await check('GET monthly.js', '/miniapp/assets/monthly.js', 200, (body) =>
+  body.includes('formatThb') ? null : 'เนื้อหา monthly.js ไม่ตรงที่คาด');
+
+await check('GET monthly payload', `/api/summary/${monthlyToken}`, 200, (body, res) => {
+  if (res.headers.get('cache-control') !== 'no-store') return 'ขาด header Cache-Control: no-store';
+  if (body.kind !== 'monthly') return 'payload ไม่ได้ทำเครื่องหมายว่าเป็นสรุปเดือน';
+  if (body.sections?.[0]?.kpis?.[0]?.unit !== 'thb') return 'หน่วยเงินใน payload ผิดรูป';
   return null;
 });
 

@@ -177,6 +177,23 @@ export function initDataDb(sqlitePath = config.session.sqlitePath) {
       requested_by  TEXT NOT NULL,
       created_at    INTEGER NOT NULL
     );
+
+    -- Where a chat has got to in a menu flow: which flow it started, which
+    -- metric it picked, which site, which month. Here rather than in memory
+    -- for the same reason as every other pending row above — the buttons the
+    -- user is looking at outlive a restart, and a half-made selection that
+    -- silently evaporated would answer the next tap with the wrong month.
+    --
+    -- One selection per chat: starting a flow replaces whatever was in
+    -- progress, and "❌ ยกเลิก" deletes the row outright.
+    CREATE TABLE IF NOT EXISTS menu_selections (
+      chat_id     TEXT PRIMARY KEY,
+      flow        TEXT NOT NULL,
+      metric      TEXT,
+      site        TEXT,
+      year_month  TEXT,
+      created_at  INTEGER NOT NULL
+    );
   `);
 
   restoreLegacyPendingRows(db, legacy);
@@ -226,11 +243,30 @@ export function markParsed(rawFileId) {
   requireDb().prepare('UPDATE raw_files SET parsed = 1 WHERE id = ?').run(rawFileId);
 }
 
-export function listRawFiles({ site } = {}) {
+export function listRawFiles({ site, yearMonth } = {}) {
   const d = requireDb();
+  if (site && yearMonth) {
+    return d
+      .prepare('SELECT * FROM raw_files WHERE site = ? AND year_month = ? ORDER BY file_type')
+      .all(site, yearMonth);
+  }
   return site
     ? d.prepare('SELECT * FROM raw_files WHERE site = ? ORDER BY year_month DESC, file_type').all(site)
     : d.prepare('SELECT * FROM raw_files ORDER BY site, year_month DESC, file_type').all();
+}
+
+/**
+ * The months this site actually has files for, newest first.
+ *
+ * The month picker is built from this rather than from the calendar: offering
+ * a month with nothing behind it produces a dashboard of empty sections, and
+ * the user has no way to tell that apart from a month whose data is bad.
+ */
+export function listRawFileMonths(site) {
+  return requireDb()
+    .prepare('SELECT DISTINCT year_month FROM raw_files WHERE site = ? ORDER BY year_month DESC')
+    .all(site)
+    .map((row) => row.year_month);
 }
 
 export function insertParsedRows(rawFileId, { fileType, site, yearMonth, rows }) {
@@ -408,6 +444,77 @@ export function getPendingFxUpdate(chatId) {
 
 export function clearPendingFxUpdate(chatId) {
   requireDb().prepare('DELETE FROM pending_fx_updates WHERE chat_id = ?').run(String(chatId));
+}
+
+// --- menu flow state --------------------------------------------------------
+
+/** Starts a flow, discarding whatever selection was half-made before it. */
+export function startMenuSelection(chatId, { flow, metric = null }) {
+  requireDb()
+    .prepare(
+      `INSERT INTO menu_selections (chat_id, flow, metric, site, year_month, created_at)
+       VALUES (@chatId, @flow, @metric, NULL, NULL, @createdAt)
+       ON CONFLICT(chat_id) DO UPDATE SET
+         flow = excluded.flow, metric = excluded.metric,
+         site = NULL, year_month = NULL, created_at = excluded.created_at`,
+    )
+    .run({ chatId: String(chatId), flow, metric, createdAt: now() });
+}
+
+/**
+ * Fills in one step of the flow. Returns the updated row, or `null` when
+ * nothing was in progress — a button from a cancelled or expired flow must not
+ * quietly create a new selection with only half its fields set.
+ */
+export function updateMenuSelection(chatId, patch) {
+  const d = requireDb();
+  const key = String(chatId);
+  // Through getMenuSelection so an aged-out selection is refused here too — a
+  // button pressed a week later must not revive the flow it belonged to.
+  const existing = getMenuSelection(key);
+  if (!existing) return null;
+
+  d.prepare('UPDATE menu_selections SET metric = ?, site = ?, year_month = ? WHERE chat_id = ?').run(
+    'metric' in patch ? patch.metric : existing.metric,
+    'site' in patch ? patch.site : existing.site,
+    'yearMonth' in patch ? patch.yearMonth : existing.year_month,
+    key,
+  );
+  return d.prepare('SELECT * FROM menu_selections WHERE chat_id = ?').get(key);
+}
+
+/**
+ * How long a half-made selection stays live.
+ *
+ * It has to expire, because the keyboard that made it never does: a site
+ * button tapped out of a week-old message would otherwise resume a flow whose
+ * context the user has long forgotten, and answer with a month they picked for
+ * a different question. A day is generous for "I got interrupted mid-flow" and
+ * short enough that a stale tap lands on the "เริ่มใหม่จากเมนูหลัก" reply
+ * instead of on a silent answer.
+ */
+const MENU_SELECTION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** The live selection for this chat, or `null` if there is none or it aged out. */
+export function getMenuSelection(chatId, { ttlMs = MENU_SELECTION_TTL_MS } = {}) {
+  const key = String(chatId);
+  const row = requireDb().prepare('SELECT * FROM menu_selections WHERE chat_id = ?').get(key);
+  if (!row) return null;
+
+  if (now() - row.created_at > ttlMs) {
+    // Cleaned up on read rather than by a sweeper: there is at most one row per
+    // chat, so the table cannot grow, and the only moment staleness matters is
+    // the moment someone asks.
+    clearMenuSelection(key);
+    return null;
+  }
+  return row;
+}
+
+export function clearMenuSelection(chatId) {
+  return requireDb()
+    .prepare('DELETE FROM menu_selections WHERE chat_id = ?')
+    .run(String(chatId)).changes;
 }
 
 /**
