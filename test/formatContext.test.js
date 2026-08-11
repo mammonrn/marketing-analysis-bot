@@ -258,17 +258,29 @@ test('a point-log context is told the Points scale, not the ×1,000 one', () => 
   // which is not true of `Points`. Left unqualified, the model reading a
   // bonus_log context has the wrong factor for the only money column in it.
   const rows = [
-    dbRow({ Date: '2026-07-01', Type: 'Money Daily', total_points: 1.2, total_points_THB: 94440 },
+    dbRow({ Date: '2026-07-01', Type: 'Money Daily', total_points: 1.2, total_points_THB: 94.44 },
       { rowDate: '2026-07-01' }),
   ];
   const text = context(rows, { fileType: 'bonus_log', site: 'shwe666' });
 
   assert.match(text, /point log/);
-  assert.match(text, /100,000 เท่า/);
-  // The exact figure the user reported the bug against.
-  assert.match(text, /ค่าดิบ 1\.200 = 120,000 MMK/);
-  assert.match(text, /`total_points_THB` คือค่าที่คูณ 100,000/);
+  assert.match(text, /100 เท่า/);
+  // The worked example the user reported the bug against, at the scale
+  // currently configured.
+  assert.match(text, /ค่าดิบ 1\.200 = 120 MMK/);
+  assert.match(text, /`total_points_THB` คือค่าที่คูณ 100/);
   assert.match(text, /`total_points` คือผลรวมค่าดิบ/);
+});
+
+test('the points note quotes the configured scale, not a hardcoded one', () => {
+  // The scale is still provisional, so the header must follow config rather
+  // than repeat a number someone typed into a template string.
+  const rows = [dbRow({ Date: '2026-07-01', total_points: 1.2 }, { rowDate: '2026-07-01' })];
+  const text = context(rows, { fileType: 'bonus_log', site: 'shwe666' });
+  const { pointsScaleFactor } = SITES.shwe666;
+
+  assert.ok(text.includes(`ย่อไว้ ${pointsScaleFactor.toLocaleString('en-US')} เท่า`));
+  assert.ok(text.includes(`= ${(1.2 * pointsScaleFactor).toLocaleString('en-US')} MMK`));
 });
 
 test('a non-point-log context is not given the points note', () => {
