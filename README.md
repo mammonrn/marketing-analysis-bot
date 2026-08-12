@@ -73,6 +73,21 @@ telegraf (polling หรือ webhook)
 และคำถามจากปุ่มส่ง `yearMonths` ตรง ๆ เข้า `buildDataContext` แทนหน้าต่าง 3 เดือนย้อนหลัง
 เพราะเดือนที่ผู้ใช้เลือกอาจเก่ากว่านั้น
 
+### ครบ 20 นาที = ปิด session แล้วแจ้ง (ไม่ถาม ไม่สรุปให้เอง)
+
+`closeIdleSession` ใน `src/session/summary.js` — sweeper เดินทุกนาที เจอ session ที่เงียบเกิน
+`SESSION_IDLE_MINUTES` แล้ว **ปิดก่อน แล้วค่อยส่งข้อความ**: ข้อความบอกว่าปิดแล้ว เพราะงั้น state
+ต้องเป็นจริงก่อนส่ง และถ้าส่งไม่สำเร็จ (ถูกบล็อก/ลบแชท) session ก็ปิดไปแล้วอยู่ดี ไม่ค้างให้
+sweeper มาเจอซ้ำนาทีถัดไป
+
+ไม่มีปุ่มติดมาด้วย และ**ไม่เรียกโมเดล** — timeout ไม่ควรจ่ายค่า API call ให้คนที่เดินออกไปจากโต๊ะ
+อยากได้สรุปต้องขอเอง (`/สรุป`, `/จบ`, ปุ่ม "📋 สรุป session นี้") ซึ่งยังทำงานเหมือนเดิมทุกอย่าง
+
+ปิด session = archive turns ลง `turn_archive` แล้วเคลียร์ `turns` (เก็บ site ที่จำไว้) — ตัวที่กัน
+sweeper วนซ้ำคือ `findIdleSessions` ที่นับแค่ session ที่**ยังมี turn อยู่** ไม่ใช่ flag แยก
+(คอลัมน์ `summary_prompted_at` กับ `markSummaryPrompted` ถูกถอดออกพร้อมกับ flow ถามก่อน —
+DB เก่ายังมีคอลัมน์ค้างอยู่ได้ ไม่มีโค้ดอ่านหรือเขียนแล้ว)
+
 ### Dashboard สรุปเดือน
 
 `src/session/monthlyReport.js` แยกจาก `src/session/summary.js` เพราะอ่านคนละแหล่ง —
@@ -234,7 +249,7 @@ git add skills/ && git commit -m "sync: update skill" && git push
 | ไม่สร้างกราฟทุกคำถาม | `SKILL.md` + spec §1, §6 | `parseEnvelope` ทิ้ง `show_chart` ถ้า payload กราฟใช้ไม่ได้ + fraud ถูกบังคับ `false` เสมอ |
 | fraud ต้องครบ 5 ส่วน | `fraud-anomaly-detection.md` + spec §7 | `validateFraudResponse` → ถ้าไม่ครบ ขอแก้ 1 รอบ → ถ้ายังไม่ผ่าน **ไม่ส่งออก** |
 | ห้ามฟันธงว่ามีการโกง | เดียวกัน | ตรวจ verdict pattern (`ฟันธง`, `โกงแน่นอน`, …) แล้ว reject |
-| สรุปเฉพาะตอนขอ/idle ไม่ใช่ทุก N คำถาม | `SKILL.md` + spec §5.2 | `findIdleSessions` + `markSummaryPrompted` — idle จะ**ถามก่อน** ไม่ดัน dashboard เข้ามาเลย |
+| สรุปเฉพาะตอนขอ ไม่ใช่ทุก N คำถาม และไม่ใช่ตอน idle | spec §5.2 | `runSummary` ถูกเรียกจาก `/สรุป` `/จบ` และปุ่มเมนูเท่านั้น — idle **ปิด session แล้วแจ้ง** ไม่สร้าง dashboard และไม่เรียกโมเดล |
 | whitelist | spec §8 | middleware default-deny ก่อนถึง handler |
 | token ผิด = ไม่ต้อง start | — | `getMe()` ตอน boot → ถ้า 401 ตายทันที ดีกว่ารันแล้วเงียบ |
 

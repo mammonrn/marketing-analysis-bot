@@ -1,10 +1,13 @@
 /**
- * End-of-session dashboard (spec §5.2, §5.3).
+ * End of a session (spec §5.2, §5.3).
  *
  * Two entry points, deliberately separated:
- *   - offerSummary()  → asks first. The spec is explicit that an idle timeout
- *                       must not push a dashboard unprompted.
- *   - runSummary()    → actually builds it, on an explicit yes or /สรุป.
+ *   - closeIdleSession() → the timeout path. Closes the session and says so.
+ *                          It builds nothing: an idle timeout must not push a
+ *                          dashboard, or a model call, at someone who walked
+ *                          away from their desk.
+ *   - runSummary()       → builds the wrap-up, only ever on an explicit ask
+ *                          (/สรุป, /จบ, or the "สรุป session นี้" menu button).
  */
 
 import { config } from '../config.js';
@@ -12,41 +15,37 @@ import { logger } from '../logger.js';
 import { askClaude } from '../claude/client.js';
 import { sendSafe } from '../telegram/send.js';
 import { siteDisplayName } from '../data/sites.js';
-import { getTurns, clearSession, createSummaryToken, markSummaryPrompted } from './store.js';
+import { getTurns, clearSession, createSummaryToken } from './store.js';
 
-export const SUMMARY_YES = 'summary:yes';
-export const SUMMARY_NO = 'summary:no';
-
-/** Ask whether the user wants a wrap-up, without generating one yet. */
-export async function offerSummary(telegram, chatId, { idle = false } = {}) {
+/**
+ * Close a session that went quiet, then tell the chat it happened.
+ *
+ * Closed first, announced second: the message states the session is already
+ * closed, so the state has to be true before it is sent. It also means a send
+ * that fails (blocked bot, deleted chat) leaves a closed session rather than
+ * one the sweeper would find idle again a minute later.
+ */
+export async function closeIdleSession(telegram, chatId) {
   const turns = getTurns(chatId);
+  // Nothing was asked, so there is no session to announce the end of.
   if (turns.length === 0) return false;
 
   const sites = [...new Set(turns.map((t) => t.site).filter(Boolean))]
     .map(siteDisplayName)
     .join(', ');
 
-  const lead = idle
-    ? `⏳ ไม่มีคำถามใหม่มา ${config.session.idleMinutes} นาทีแล้ว`
-    : '📋 สรุป session';
-
   const text =
-    `${lead}\n\n` +
-    `session นี้คุยกันไป *${turns.length} คำถาม*${sites ? ` (เว็บ: ${sites})` : ''}\n` +
-    'ต้องการให้สรุปภาพรวม + dashboard ไหมครับ?';
+    `✅ session นี้ปิดอัตโนมัติแล้ว (ไม่มีคำถามใหม่เกิน ${config.session.idleMinutes} นาที)\n` +
+    `คุยกันไปทั้งหมด *${turns.length} คำถาม*${sites ? ` (เว็บ: ${sites})` : ''}\n` +
+    'พิมพ์คำถามใหม่ได้เลยครับ เดี๋ยวเปิด session ใหม่ให้';
 
-  await sendSafe(telegram, chatId, text, {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: '📊 สรุปเลย', callback_data: SUMMARY_YES },
-          { text: 'ยังไม่ต้อง', callback_data: SUMMARY_NO },
-        ],
-      ],
-    },
-  });
+  clearSession(chatId);
+  logger.info('session closed on idle', { chatId, turns: turns.length });
 
-  if (idle) markSummaryPrompted(chatId);
+  // No keyboard. The old flow ended in "สรุปเลย / ยังไม่ต้อง" buttons, which
+  // went stale the moment the message scrolled away; asking again by typing is
+  // what /สรุป is for.
+  await sendSafe(telegram, chatId, text);
   return true;
 }
 
@@ -112,8 +111,11 @@ export async function runSummary(telegram, chatId) {
 }
 
 /**
- * Idle sweeper. Runs on a timer and offers a summary to sessions that went
- * quiet; `markSummaryPrompted` stops it from asking the same session twice.
+ * Idle sweeper. Runs on a timer and closes sessions that went quiet.
+ *
+ * Nothing keeps a "already handled this one" flag any more: closing a session
+ * archives its turns, and `findIdleSessions` only returns sessions that still
+ * have turns, so a closed session cannot come back around on the next sweep.
  */
 export function startIdleSweeper(telegram, { findIdleSessions, intervalMs = 60_000 }) {
   const timer = setInterval(async () => {
@@ -127,15 +129,14 @@ export function startIdleSweeper(telegram, { findIdleSessions, intervalMs = 60_0
 
     for (const session of idleSessions) {
       try {
-        await offerSummary(telegram, session.chat_id, { idle: true });
-        logger.info('offered idle summary', { chatId: session.chat_id });
+        await closeIdleSession(telegram, session.chat_id);
       } catch (err) {
-        // A blocked bot or deleted chat must not kill the sweeper.
-        logger.warn('could not offer idle summary', {
+        // A blocked bot or deleted chat must not kill the sweeper. The session
+        // is already closed by this point, so there is nothing to undo.
+        logger.warn('could not announce an idle session close', {
           chatId: session.chat_id,
           message: err?.message,
         });
-        markSummaryPrompted(session.chat_id);
       }
     }
   }, intervalMs);

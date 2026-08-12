@@ -48,7 +48,7 @@ import {
   createSummaryToken,
   createMonthlyDashboardToken,
 } from '../session/store.js';
-import { runSummary, offerSummary, SUMMARY_YES, SUMMARY_NO } from '../session/summary.js';
+import { runSummary } from '../session/summary.js';
 import { buildMonthlyPayload } from '../session/monthlyReport.js';
 import {
   MENU_QUICK,
@@ -966,17 +966,9 @@ export function createBot() {
     return sendSafe(ctx.telegram, ctx.chat.id, 'โอเคครับ ไม่เปลี่ยนอัตราแลกเปลี่ยน');
   });
 
-  bot.action(SUMMARY_YES, async (ctx) => {
-    await ctx.answerCbQuery('กำลังสรุป...').catch(() => {});
-    await ctx.editMessageReplyMarkup(undefined).catch(() => {});
-    return runSummary(ctx.telegram, ctx.chat.id);
-  });
-
-  bot.action(SUMMARY_NO, async (ctx) => {
-    await ctx.answerCbQuery('โอเคครับ').catch(() => {});
-    await ctx.editMessageReplyMarkup(undefined).catch(() => {});
-    return sendSafe(ctx.telegram, ctx.chat.id, 'โอเคครับ ถามต่อได้เลย — พิมพ์ `/สรุป` เมื่อไหร่ก็ได้');
-  });
+  // No `summary:yes` / `summary:no` actions: the idle timeout closes the
+  // session and says so instead of asking, so nothing sends those buttons any
+  // more. A wrap-up is asked for with /สรุป or the menu button.
 
   bot.on('text', async (ctx) => {
     const text = ctx.message.text?.trim();

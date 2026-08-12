@@ -23,13 +23,17 @@ export function initDb(sqlitePath = config.session.sqlitePath) {
   db.pragma('foreign_keys = ON');
 
   db.exec(`
+    -- No summary_prompted_at column: it existed only so the sweeper would not
+    -- ask the same session twice, and the sweeper no longer asks anything — it
+    -- closes the session, which archives the turns and takes it out of
+    -- findIdleSessions on its own. An existing database keeps the column;
+    -- nothing reads or writes it.
     CREATE TABLE IF NOT EXISTS sessions (
-      chat_id             TEXT PRIMARY KEY,
-      user_id             TEXT NOT NULL,
-      site                TEXT,
-      last_active         INTEGER NOT NULL,
-      summary_prompted_at INTEGER,
-      created_at          INTEGER NOT NULL
+      chat_id      TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL,
+      site         TEXT,
+      last_active  INTEGER NOT NULL,
+      created_at   INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS turns (
@@ -113,10 +117,10 @@ export function getSession(chatId) {
   return requireDb().prepare('SELECT * FROM sessions WHERE chat_id = ?').get(String(chatId));
 }
 
-/** Any activity resets both the idle clock and the "already asked" flag. */
+/** Any activity resets the idle clock. */
 export function touchSession(chatId) {
   requireDb()
-    .prepare('UPDATE sessions SET last_active = ?, summary_prompted_at = NULL WHERE chat_id = ?')
+    .prepare('UPDATE sessions SET last_active = ? WHERE chat_id = ?')
     .run(now(), String(chatId));
 }
 
@@ -160,9 +164,12 @@ export function countTurns(chatId) {
 }
 
 /**
- * Sessions that have gone quiet and have not yet been offered a summary.
- * Only sessions with at least one turn qualify — there is nothing to summarise
- * for someone who said hello and left.
+ * Sessions that have gone quiet and still hold turns.
+ *
+ * The turns requirement is what keeps the sweeper from looping: someone who
+ * said hello and left has nothing to close, and a session that was just closed
+ * has had its turns archived, so it drops out of this query until the next
+ * question arrives.
  */
 export function findIdleSessions(idleMinutes = config.session.idleMinutes) {
   const cutoff = now() - idleMinutes * 60_000;
@@ -170,16 +177,9 @@ export function findIdleSessions(idleMinutes = config.session.idleMinutes) {
     .prepare(
       `SELECT s.* FROM sessions s
        WHERE s.last_active < ?
-         AND s.summary_prompted_at IS NULL
          AND EXISTS (SELECT 1 FROM turns t WHERE t.chat_id = s.chat_id)`,
     )
     .all(cutoff);
-}
-
-export function markSummaryPrompted(chatId) {
-  requireDb()
-    .prepare('UPDATE sessions SET summary_prompted_at = ? WHERE chat_id = ?')
-    .run(now(), String(chatId));
 }
 
 /** Archive the turns, then reset the live session (spec §5.3 step 4). */
@@ -192,7 +192,7 @@ export function clearSession(chatId) {
        SELECT chat_id, question, site, metrics_json, reply, response_kind, ts, ? FROM turns WHERE chat_id = ?`,
     ).run(now(), key);
     d.prepare('DELETE FROM turns WHERE chat_id = ?').run(key);
-    d.prepare('UPDATE sessions SET summary_prompted_at = NULL, last_active = ? WHERE chat_id = ?').run(now(), key);
+    d.prepare('UPDATE sessions SET last_active = ? WHERE chat_id = ?').run(now(), key);
   });
   tx();
 }

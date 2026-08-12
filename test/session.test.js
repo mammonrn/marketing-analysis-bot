@@ -63,7 +63,7 @@ test('records turns with their metrics', () => {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
-test('idle detection only picks sessions that have turns and were not asked yet', async () => {
+test('idle detection only picks sessions that have turns', async () => {
   store.getOrCreateSession('chat-idle', 'user-1');
   store.addTurn('chat-idle', { question: 'ถามอะไรไว้', site: 'shwe666', metrics: [] });
   // Nothing is idle at 20 minutes yet.
@@ -75,15 +75,18 @@ test('idle detection only picks sessions that have turns and were not asked yet'
   // A 0-minute threshold treats everything as idle.
   assert.equal(store.findIdleSessions(0).some((s) => s.chat_id === 'chat-idle'), true);
 
-  // An empty session is never worth summarising.
+  // An empty session has no session to close.
   store.getOrCreateSession('chat-empty', 'user-1');
   assert.equal(store.findIdleSessions(0).some((s) => s.chat_id === 'chat-empty'), false);
 
-  // Once asked, we must not ask again.
-  store.markSummaryPrompted('chat-idle');
+  // Closing it takes it out of the sweep — this is what stops the sweeper from
+  // announcing the same close every minute, now that nothing keeps a flag.
+  store.clearSession('chat-idle');
+  await tick();
   assert.equal(store.findIdleSessions(0).some((s) => s.chat_id === 'chat-idle'), false);
 
-  // New activity re-arms the offer.
+  // A new question re-arms it.
+  store.addTurn('chat-idle', { question: 'ถามใหม่', site: 'shwe666', metrics: [] });
   store.touchSession('chat-idle');
   await tick();
   assert.equal(store.findIdleSessions(0).some((s) => s.chat_id === 'chat-idle'), true);
